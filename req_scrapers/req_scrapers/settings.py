@@ -25,7 +25,7 @@ NEWSPIDER_MODULE = "req_scrapers.spiders"
 # Use very conservative concurrency and a small randomized delay
 CONCURRENT_REQUESTS = 8  # Reduced from 8 to be more conservative
 CONCURRENT_REQUESTS_PER_DOMAIN = 1
-DOWNLOAD_DELAY = 1  # Increased from 2 to 3 seconds
+DOWNLOAD_DELAY = 1.5  # Increased from 2 to 3 seconds
 RANDOMIZE_DOWNLOAD_DELAY = True
 
 # Enable cookies for session management (handled by comprehensive middleware)
@@ -74,7 +74,7 @@ DOWNLOADER_MIDDLEWARES = {
 
 # Enable and configure the AutoThrottle extension (reduces request rate on load)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html
-# AUTOTHROTTLE_ENABLED = True
+AUTOTHROTTLE_ENABLED = True
 # # The initial download delay
 # AUTOTHROTTLE_START_DELAY = 1.0  # Increased from 1.0
 # # The maximum download delay to be set in case of high latencies
