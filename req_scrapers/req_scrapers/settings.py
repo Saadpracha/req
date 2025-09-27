@@ -29,7 +29,7 @@ DOWNLOAD_DELAY = 1  # Increased from 2 to 3 seconds
 RANDOMIZE_DOWNLOAD_DELAY = True
 
 # Enable cookies for session management (handled by comprehensive middleware)
-COOKIES_ENABLED = True
+# COOKIES_ENABLED = True
 
 # Disable Telnet Console (enabled by default)
 #TELNETCONSOLE_ENABLED = False
@@ -74,24 +74,24 @@ DOWNLOADER_MIDDLEWARES = {
 
 # Enable and configure the AutoThrottle extension (reduces request rate on load)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html
-AUTOTHROTTLE_ENABLED = True
-# The initial download delay
-AUTOTHROTTLE_START_DELAY = 1.0  # Increased from 1.0
-# The maximum download delay to be set in case of high latencies
-AUTOTHROTTLE_MAX_DELAY = 10.0  # Increased from 10.0
-# The average number of requests Scrapy should be sending in parallel to
-# each remote server
-AUTOTHROTTLE_TARGET_CONCURRENCY = 0.3  # Reduced from 0.5 to be more conservative
-# Enable showing throttling stats for every response received:
-AUTOTHROTTLE_DEBUG = True  # Enable for monitoring
+# AUTOTHROTTLE_ENABLED = True
+# # The initial download delay
+# AUTOTHROTTLE_START_DELAY = 1.0  # Increased from 1.0
+# # The maximum download delay to be set in case of high latencies
+# AUTOTHROTTLE_MAX_DELAY = 10.0  # Increased from 10.0
+# # The average number of requests Scrapy should be sending in parallel to
+# # each remote server
+# AUTOTHROTTLE_TARGET_CONCURRENCY = 0.3  # Reduced from 0.5 to be more conservative
+# # Enable showing throttling stats for every response received:
+# AUTOTHROTTLE_DEBUG = True  # Enable for monitoring
 
 # Retry & timeouts (avoid hammering while handling transient failures)
 RETRY_ENABLED = True
 RETRY_TIMES = 3  # Reduced from 5 to avoid excessive retries
 RETRY_HTTP_CODES = [500, 502, 503, 504, 408, 429]  # Removed 400, 403, 404 as they're likely permanent
-DOWNLOAD_TIMEOUT = 45  # Increased timeout
-DOWNLOAD_WARNSIZE = 33554432  # 32MB warning size
-DOWNLOAD_MAXSIZE = 52428800  # 50MB max size
+DOWNLOAD_TIMEOUT = 30  # Increased timeout
+# DOWNLOAD_WARNSIZE = 33554432  # 32MB warning size
+# DOWNLOAD_MAXSIZE = 52428800  # 50MB max size
 
 # Enable and configure HTTP caching (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
