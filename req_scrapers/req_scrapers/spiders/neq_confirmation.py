@@ -4,6 +4,7 @@ from pathlib import Path
 import csv
 import json
 import base64
+import os
 
 
 class ReqScraperSpider(scrapy.Spider):
@@ -16,12 +17,38 @@ class ReqScraperSpider(scrapy.Spider):
     current_proxy_index = 0
     total_requests = 0
     errors = 0
+    use_residential_proxy = False
+    resi_proxy_host = ""
+    resi_proxy_port = ""
+    resi_proxy_user = ""
+    resi_proxy_pass = ""
+
+    @classmethod
+    def from_crawler(cls, crawler, *args, **kwargs):
+        # Create spider via base implementation to ensure crawler is set
+        spider = super(ReqScraperSpider, cls).from_crawler(crawler, *args, **kwargs)
+
+        # Load residential proxy settings from Scrapy settings or environment
+        settings = crawler.settings
+        spider.resi_proxy_host = str(settings.get("RESI_PROXY_HOST", os.getenv("RESI_PROXY_HOST", ""))).strip()
+        spider.resi_proxy_port = str(settings.get("RESI_PROXY_PORT", os.getenv("RESI_PROXY_PORT", ""))).strip()
+        spider.resi_proxy_user = str(settings.get("RESI_PROXY_USER", os.getenv("RESI_PROXY_USER", ""))).strip()
+        spider.resi_proxy_pass = str(settings.get("RESI_PROXY_PASS", os.getenv("RESI_PROXY_PASS", ""))).strip()
+
+        if spider.resi_proxy_host and spider.resi_proxy_port and spider.resi_proxy_user and spider.resi_proxy_pass:
+            spider.use_residential_proxy = True
+            spider.logger.info(
+                "Using residential proxy endpoint %s:%s (country configured in credentials)",
+                spider.resi_proxy_host,
+                spider.resi_proxy_port,
+            )
+        return spider
 
     def __init__(self, input_file: str = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Require explicit input file; no default. Column expected: "Neq_numbers"
 
-        # Load proxies from proxies.json at project root if present
+        # Load proxies from proxies.json at project root if present (fallback when no residential proxy)
         try:
             proxies_path = Path.cwd() / "proxies.json"
             if proxies_path.is_file():
@@ -244,6 +271,8 @@ class ReqScraperSpider(scrapy.Spider):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
+            # Force new TCP connection for each request to encourage a new IP from the pool
+            "Connection": "close",
         }
 
         req_meta = {
@@ -252,7 +281,11 @@ class ReqScraperSpider(scrapy.Spider):
             "handle_httpstatus_list": [400, 403, 404, 429, 500, 502, 503, 504],
         }
 
-        if self.proxy_list:
+        if self.use_residential_proxy:
+            creds = f"{self.resi_proxy_user}:{self.resi_proxy_pass}"
+            headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
+            req_meta["proxy"] = f"http://{self.resi_proxy_host}:{self.resi_proxy_port}"
+        elif self.proxy_list:
             proxy = self.get_proxy_creds(self.current_proxy_index)
             if proxy["user"] and proxy["pass"]:
                 creds = f"{proxy['user']}:{proxy['pass']}"
@@ -289,7 +322,21 @@ class ReqScraperSpider(scrapy.Spider):
             self.errors += 1
             return
 
-        if self.proxy_list:
+        if self.use_residential_proxy:
+            # Retry with the same endpoint; closing connection should get a different IP
+            new_meta = dict(req.meta)
+            new_meta["proxy"] = f"http://{self.resi_proxy_host}:{self.resi_proxy_port}"
+            creds = f"{self.resi_proxy_user}:{self.resi_proxy_pass}"
+            auth_value = "Basic " + base64.b64encode(creds.encode()).decode()
+            req.headers["Proxy-Authorization"] = auth_value
+            req.headers["Connection"] = "close"
+
+            self.logger.warning(
+                "Request failed: %s — retrying via residential endpoint (new IP expected)",
+                req.url,
+            )
+            yield req.replace(meta=new_meta, dont_filter=True)
+        elif self.proxy_list:
             prev = self.current_proxy_index
             self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
             proxy = self.get_proxy_creds(self.current_proxy_index)

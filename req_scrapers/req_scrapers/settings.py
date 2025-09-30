@@ -23,13 +23,13 @@ NEWSPIDER_MODULE = "req_scrapers.spiders"
 
 # Concurrency and throttling settings (be polite; reduce ban risk)
 # Use very conservative concurrency and a small randomized delay
-CONCURRENT_REQUESTS = 8  # Reduced from 8 to be more conservative
-CONCURRENT_REQUESTS_PER_DOMAIN = 1
-DOWNLOAD_DELAY = 1.5  # Increased from 2 to 3 seconds
-RANDOMIZE_DOWNLOAD_DELAY = True
+# CONCURRENT_REQUESTS = 8
+# CONCURRENT_REQUESTS_PER_DOMAIN = 1
+# DOWNLOAD_DELAY = 0.5
+# RANDOMIZE_DOWNLOAD_DELAY = True
 
-# Enable cookies for session management (handled by comprehensive middleware)
-# COOKIES_ENABLED = True
+# Disable cookies (avoid server-side tracking linkage across requests)
+# COOKIES_ENABLED = False
 
 # Disable Telnet Console (enabled by default)
 #TELNETCONSOLE_ENABLED = False
@@ -48,13 +48,10 @@ DEFAULT_REQUEST_HEADERS = {
 
 # Enable or disable downloader middlewares
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
-DOWNLOADER_MIDDLEWARES = {
-    "req_scrapers.comprehensive_middleware.ComprehensiveAntiDetectionMiddleware": 400,
-    "req_scrapers.middlewares.RequestTrackingMiddleware": 600,
-    "req_scrapers.middlewares.IntelligentRateLimitMiddleware": 700,
-    # "req_scrapers.middlewares.SmartRetryMiddleware": 800,  # Disabled - handled manually
-    "req_scrapers.middlewares.ReqScrapersDownloaderMiddleware": 543,
-}
+# Keep defaults; consider adding UA rotation middleware if needed
+#DOWNLOADER_MIDDLEWARES = {
+#    "req_scrapers.middlewares.ReqScrapersDownloaderMiddleware": 543,
+#}
 
 # Enable or disable extensions
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
@@ -74,24 +71,22 @@ DOWNLOADER_MIDDLEWARES = {
 
 # Enable and configure the AutoThrottle extension (reduces request rate on load)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html
-AUTOTHROTTLE_ENABLED = True
+# AUTOTHROTTLE_ENABLED = True
 # # The initial download delay
-# AUTOTHROTTLE_START_DELAY = 1.0  # Increased from 1.0
+# AUTOTHROTTLE_START_DELAY = 1.0
 # # The maximum download delay to be set in case of high latencies
-# AUTOTHROTTLE_MAX_DELAY = 10.0  # Increased from 10.0
+# AUTOTHROTTLE_MAX_DELAY = 10.0
 # # The average number of requests Scrapy should be sending in parallel to
 # # each remote server
-# AUTOTHROTTLE_TARGET_CONCURRENCY = 0.3  # Reduced from 0.5 to be more conservative
+# AUTOTHROTTLE_TARGET_CONCURRENCY = 0.5
 # # Enable showing throttling stats for every response received:
-# AUTOTHROTTLE_DEBUG = True  # Enable for monitoring
+# AUTOTHROTTLE_DEBUG = False
 
 # Retry & timeouts (avoid hammering while handling transient failures)
 RETRY_ENABLED = True
-RETRY_TIMES = 3  # Reduced from 5 to avoid excessive retries
-RETRY_HTTP_CODES = [500, 502, 503, 504, 408, 429]  # Removed 400, 403, 404 as they're likely permanent
-DOWNLOAD_TIMEOUT = 30  # Increased timeout
-# DOWNLOAD_WARNSIZE = 33554432  # 32MB warning size
-# DOWNLOAD_MAXSIZE = 52428800  # 50MB max size
+RETRY_TIMES = 3
+RETRY_HTTP_CODES = [500, 502, 503, 504, 400, 408, 429]
+DOWNLOAD_TIMEOUT = 30
 
 # Enable and configure HTTP caching (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
@@ -104,29 +99,17 @@ DOWNLOAD_TIMEOUT = 30  # Increased timeout
 # Set settings whose default value is deprecated to a future-proof value
 FEED_EXPORT_ENCODING = "utf-8"
 
-# Additional anti-detection settings
-ROBOTSTXT_OBEY = False  # Disable robots.txt to avoid detection patterns
-TELNETCONSOLE_ENABLED = False  # Disable telnet console for security
-
-# DNS settings for better performance
-# DNSCACHE_ENABLED = True
-# DNSCACHE_SIZE = 10000
-# DNS_TIMEOUT = 60
-
-# Memory settings
-# MEMDEBUG_ENABLED = True
-# MEMUSAGE_ENABLED = True
-# MEMUSAGE_LIMIT_MB = 2048
-# MEMUSAGE_WARNING_MB = 1024
-
-# Additional headers to appear more like a real browser
-DEFAULT_REQUEST_HEADERS.update({
-    "Accept-Encoding": "gzip, deflate, br",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Upgrade-Insecure-Requests": "1",
-})
+# ---------------------
+# Residential proxy (IPRoyal) configuration
+# Provide values here or via environment variables of same names.
+# Example for Canada rotating residential proxy:
+#   RESI_PROXY_HOST = "geo.iproyal.com"
+#   RESI_PROXY_PORT = "12321"
+#   RESI_PROXY_USER = "LCtjo7gHrym0mc6t"
+#   RESI_PROXY_PASS = "GW4DRHxA07eCKbIx_country-ca"
+# If all four are set, spider will use this endpoint for every request and
+# will close TCP connection per request to let the provider rotate IPs.
+RESI_PROXY_HOST = "geo.iproyal.com"
+RESI_PROXY_PORT = "12321"
+RESI_PROXY_USER = "LCtjo7gHrym0mc6t"
+RESI_PROXY_PASS = "GW4DRHxA07eCKbIx_country-ca"
