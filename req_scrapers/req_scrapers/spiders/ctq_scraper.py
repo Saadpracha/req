@@ -394,10 +394,11 @@ class CtqScraperSpider(scrapy.Spider):
         # Update statistics
         self.stats["total_processed"] += 1
         
-        # Skip yielding items that are not valid (require droit_circulation == "Oui")
-        if droit_circulation.strip().lower() != "oui":
+        # When AI is enabled, only process companies with droit_circulation == "Oui"
+        # When AI is disabled, process all companies regardless of droit_circulation value
+        if self.use_ai and droit_circulation.strip().lower() != "oui":
             self.stats["skipped_droit_circulation"] += 1
-            self.logger.info(f"Skipping company with droit_circulation={droit_circulation}: {base_company['nom']}")
+            self.logger.info(f"Skipping company with droit_circulation={droit_circulation} (AI enabled, only processing 'Oui'): {base_company['nom']}")
             return
         
         # Check if AI limit has been reached
@@ -432,7 +433,8 @@ class CtqScraperSpider(scrapy.Spider):
                 self.errors.append(error_msg)
                 self.stats["errors"].append(error_msg)
                 self.logger.debug(traceback.format_exc())
-        # Non-"Oui" cases are already skipped above
+        # When AI is disabled, we process all companies (both "Oui" and "Non")
+        # When AI is enabled, only "Oui" companies are processed and enhanced
         elif self.use_ai and not self._enrich_fn:
             error_msg = "AI enrichment unavailable; proceeding without AI data"
             self.errors.append(error_msg)
