@@ -23,10 +23,10 @@ NEWSPIDER_MODULE = "req_scrapers.spiders"
 
 # Concurrency and throttling settings (be polite; reduce ban risk)
 # Use very conservative concurrency and a small randomized delay
-# CONCURRENT_REQUESTS = 8
+CONCURRENT_REQUESTS = 8
 # CONCURRENT_REQUESTS_PER_DOMAIN = 1
-# DOWNLOAD_DELAY = 0.5
-# RANDOMIZE_DOWNLOAD_DELAY = True
+DOWNLOAD_DELAY = 0.5
+RANDOMIZE_DOWNLOAD_DELAY = True
 
 # Disable cookies (avoid server-side tracking linkage across requests)
 # COOKIES_ENABLED = False
@@ -63,9 +63,12 @@ DEFAULT_REQUEST_HEADERS = {
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 # By default, rely on Scrapy's feed export (-o). To enable immediate CSV appends,
 # uncomment the pipeline below and set IMMEDIATE_CSV_PATH in your settings or via -s.
-# ITEM_PIPELINES = {
-#     "req_scrapers.pipelines.ImmediateCSVPipeline": 300,
-# }
+ITEM_PIPELINES = {
+    # Enrich first so CSV has AI fields
+    "req_scrapers.pipelines.AIEnrichmentPipeline": 250,
+    # Optional immediate CSV append if you set IMMEDIATE_CSV_PATH
+    # "req_scrapers.pipelines.ImmediateCSVPipeline": 300,
+}
 
 # IMMEDIATE_CSV_PATH = "path/to/your.csv"  # enable only if you want immediate writes
 
@@ -97,19 +100,5 @@ DOWNLOAD_TIMEOUT = 30
 #HTTPCACHE_STORAGE = "scrapy.extensions.httpcache.FilesystemCacheStorage"
 
 # Set settings whose default value is deprecated to a future-proof value
-FEED_EXPORT_ENCODING = "utf-8"
-
-# ---------------------
-# Residential proxy (IPRoyal) configuration
-# Provide values here or via environment variables of same names.
-# Example for Canada rotating residential proxy:
-#   RESI_PROXY_HOST = "geo.iproyal.com"
-#   RESI_PROXY_PORT = "12321"
-#   RESI_PROXY_USER = "LCtjo7gHrym0mc6t"
-#   RESI_PROXY_PASS = "GW4DRHxA07eCKbIx_country-ca"
-# If all four are set, spider will use this endpoint for every request and
-# will close TCP connection per request to let the provider rotate IPs.
-RESI_PROXY_HOST = "geo.iproyal.com"
-RESI_PROXY_PORT = "12321"
-RESI_PROXY_USER = "LCtjo7gHrym0mc6t"
-RESI_PROXY_PASS = "GW4DRHxA07eCKbIx_country-ca"
+FEED_EXPORT_ENCODING = "utf-8-sig"
+LOG_LEVEL = "DEBUG"

@@ -17,46 +17,23 @@ class ReqScraperSpider(scrapy.Spider):
     current_proxy_index = 0
     total_requests = 0
     errors = 0
-    use_residential_proxy = False
-    resi_proxy_host = ""
-    resi_proxy_port = ""
-    resi_proxy_user = ""
-    resi_proxy_pass = ""
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
-        # Create spider via base implementation to ensure crawler is set
         spider = super(ReqScraperSpider, cls).from_crawler(crawler, *args, **kwargs)
-
-        # Load residential proxy settings from Scrapy settings or environment
-        settings = crawler.settings
-        spider.resi_proxy_host = str(settings.get("RESI_PROXY_HOST", os.getenv("RESI_PROXY_HOST", ""))).strip()
-        spider.resi_proxy_port = str(settings.get("RESI_PROXY_PORT", os.getenv("RESI_PROXY_PORT", ""))).strip()
-        spider.resi_proxy_user = str(settings.get("RESI_PROXY_USER", os.getenv("RESI_PROXY_USER", ""))).strip()
-        spider.resi_proxy_pass = str(settings.get("RESI_PROXY_PASS", os.getenv("RESI_PROXY_PASS", ""))).strip()
-
-        if spider.resi_proxy_host and spider.resi_proxy_port and spider.resi_proxy_user and spider.resi_proxy_pass:
-            spider.use_residential_proxy = True
-            spider.logger.info(
-                "Using residential proxy endpoint %s:%s (country configured in credentials)",
-                spider.resi_proxy_host,
-                spider.resi_proxy_port,
-            )
         return spider
 
     def __init__(self, input_file: str = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Require explicit input file; no default. Column expected: "Neq_numbers"
 
-        # Load proxies from proxies.json at project root if present (fallback when no residential proxy)
+        # Load proxies from proxies.json at project root if present
         try:
             proxies_path = Path.cwd() / "proxies.json"
             if proxies_path.is_file():
-                # Use utf-8-sig to tolerate BOM
                 with proxies_path.open("r", encoding="utf-8-sig") as pf:
                     loaded = json.load(pf)
                     if isinstance(loaded, list):
-                        # Expect entries like "ip:port:user:pass" or "ip:port"
                         self.proxy_list = [str(x).strip() for x in loaded if str(x).strip()]
                         if self.proxy_list:
                             self.logger.info(f"Loaded {len(self.proxy_list)} proxies from {proxies_path}")
@@ -127,7 +104,7 @@ class ReqScraperSpider(scrapy.Spider):
             yield self.make_request(
                 url="https://www.pes.ctq.gouv.qc.ca/pes2/mvc/dossierclient",
                 callback=self.init_ctq_request,
-                meta={"neq": neq}
+                meta={"neq": neq, "cookiejar": f"jar-{neq}"}
             )
 
     def init_ctq_request(self, response):
@@ -153,7 +130,7 @@ class ReqScraperSpider(scrapy.Spider):
         yield self.make_request(
             url=response.url,
             callback=self.parse_ctq_redirect,
-            meta={"neq": neq},
+            meta={"neq": neq, "cookiejar": response.meta.get("cookiejar")},
             method="POST",
             formdata=ctq_payload
         )
@@ -167,7 +144,7 @@ class ReqScraperSpider(scrapy.Spider):
             yield self.make_request(
                 url=ctq_final_url,
                 callback=self.parse_ctq_result,
-                meta={"neq": neq}
+                meta={"neq": neq, "cookiejar": response.meta.get("cookiejar")}
             )
         else:
             # Assume not found and continue to RBQ
@@ -190,7 +167,7 @@ class ReqScraperSpider(scrapy.Spider):
         yield self.make_request(
             url=rbq_url,
             callback=self.init_rbq_request,
-            meta={"neq": neq, "ctq_result": ctq_result}
+            meta={"neq": neq, "ctq_result": ctq_result, "cookiejar": f"jar-rbq-{neq}"}
         )
 
     def init_rbq_request(self, response):
@@ -208,7 +185,7 @@ class ReqScraperSpider(scrapy.Spider):
         yield self.make_request(
             url=response.url,
             callback=self.parse_rbq_redirect,
-            meta={"neq": neq, "ctq_result": ctq_result},
+            meta={"neq": neq, "ctq_result": ctq_result, "cookiejar": response.meta.get("cookiejar")},
             method="POST",
             formdata=rbq_payload
         )
@@ -223,7 +200,7 @@ class ReqScraperSpider(scrapy.Spider):
             yield self.make_request(
                 url=rbq_final_url,
                 callback=self.parse_rbq_result,
-                meta={"neq": neq, "ctq_result": ctq_result}
+                meta={"neq": neq, "ctq_result": ctq_result, "cookiejar": response.meta.get("cookiejar")}
             )
         else:
             # No RBQ results page. Only yield if CTQ is Yes.
@@ -266,12 +243,17 @@ class ReqScraperSpider(scrapy.Spider):
             return {"ip": f"{ip}:{port}", "user": user, "pass": password}
         return {"ip": entry, "user": "", "pass": ""}
 
+    def _next_proxy(self):
+        if not self.proxy_list:
+            return {"ip": "", "user": "", "pass": ""}
+        self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
+        return self.get_proxy_creds(self.current_proxy_index)
+
     def make_request(self, url, callback, meta=None, method="GET", formdata=None):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            # Force new TCP connection for each request to encourage a new IP from the pool
             "Connection": "close",
         }
 
@@ -281,15 +263,17 @@ class ReqScraperSpider(scrapy.Spider):
             "handle_httpstatus_list": [400, 403, 404, 429, 500, 502, 503, 504],
         }
 
-        if self.use_residential_proxy:
-            creds = f"{self.resi_proxy_user}:{self.resi_proxy_pass}"
-            headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
-            req_meta["proxy"] = f"http://{self.resi_proxy_host}:{self.resi_proxy_port}"
-        elif self.proxy_list:
-            proxy = self.get_proxy_creds(self.current_proxy_index)
+        # Rotate proxy on every request
+        if self.proxy_list:
+            proxy = self._next_proxy()
             if proxy["user"] and proxy["pass"]:
                 creds = f"{proxy['user']}:{proxy['pass']}"
                 headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
+            else:
+                try:
+                    del headers["Proxy-Authorization"]
+                except Exception:
+                    pass
             req_meta["proxy"] = f"http://{proxy['ip']}"
 
         self.total_requests += 1
@@ -322,24 +306,8 @@ class ReqScraperSpider(scrapy.Spider):
             self.errors += 1
             return
 
-        if self.use_residential_proxy:
-            # Retry with the same endpoint; closing connection should get a different IP
-            new_meta = dict(req.meta)
-            new_meta["proxy"] = f"http://{self.resi_proxy_host}:{self.resi_proxy_port}"
-            creds = f"{self.resi_proxy_user}:{self.resi_proxy_pass}"
-            auth_value = "Basic " + base64.b64encode(creds.encode()).decode()
-            req.headers["Proxy-Authorization"] = auth_value
-            req.headers["Connection"] = "close"
-
-            self.logger.warning(
-                "Request failed: %s — retrying via residential endpoint (new IP expected)",
-                req.url,
-            )
-            yield req.replace(meta=new_meta, dont_filter=True)
-        elif self.proxy_list:
-            prev = self.current_proxy_index
-            self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
-            proxy = self.get_proxy_creds(self.current_proxy_index)
+        if self.proxy_list:
+            proxy = self._next_proxy()
 
             # Update meta with new proxy
             new_meta = dict(req.meta)
@@ -351,15 +319,14 @@ class ReqScraperSpider(scrapy.Spider):
                 auth_value = "Basic " + base64.b64encode(creds.encode()).decode()
                 req.headers["Proxy-Authorization"] = auth_value
             else:
-                # Remove header if present
                 try:
                     del req.headers["Proxy-Authorization"]
                 except Exception:
                     pass
 
             self.logger.warning(
-                "Request failed: %s — rotating proxy %d -> %d and retrying",
-                req.url, prev, self.current_proxy_index
+                "Request failed: %s — rotating proxy and retrying",
+                req.url,
             )
 
             yield req.replace(meta=new_meta, dont_filter=True)
