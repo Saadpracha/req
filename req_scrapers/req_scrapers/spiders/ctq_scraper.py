@@ -1,6 +1,7 @@
 import csv
 import json
 import base64
+import re
 import scrapy
 from scrapy.http import FormRequest
 from urllib.parse import urljoin
@@ -72,6 +73,7 @@ class CtqScraperSpider(scrapy.Spider):
 
     def parse_initial(self, response):
         neq = response.meta["neq"]
+        
         form_selector = response.xpath('//form[@id="mainForm"]')
         if not form_selector:
             return
@@ -108,6 +110,10 @@ class CtqScraperSpider(scrapy.Spider):
 
         match_text = response.xpath('//acronym/following-sibling::p/text()').get()
         if match_text == neq:
+            # Extract extra values from xpath (//div[@class="client"])[1]/ul/li/a/text()
+            extra_values_list = response.xpath('(//div[@class="client"])[1]/ul/li/a/text()').getall()
+            extra_values = ",".join([val.strip() for val in extra_values_list if val.strip()])
+            
             # Check for VRAC onclick before proceeding with CTQ data
             vrac_onclick = response.xpath('(//a[contains(text(),"Registre du camionnage en vrac")])[1]/@onclick').get()
             self.logger.debug(f"VRAC onclick: {vrac_onclick}")
@@ -129,7 +135,7 @@ class CtqScraperSpider(scrapy.Spider):
                 return self.make_request(
                     url=response.url,
                     callback=self.parse_vrac_result,
-                    meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "has_vrac": True, "ctq_action": ctq_action, "ctq_formdata": self.extract_form_data(response)},
+                    meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "has_vrac": True, "ctq_action": ctq_action, "ctq_formdata": self.extract_form_data(response), "extra_values": extra_values},
                     method="POST",
                     formdata=vrac_payload,
                 )
@@ -138,7 +144,7 @@ class CtqScraperSpider(scrapy.Spider):
                 return self.make_request(
                     url=urljoin("https://www.pes.ctq.gouv.qc.ca", ctq_action),
                     callback=self.parse_ctq_result,
-                    meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "has_vrac": False},
+                    meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "has_vrac": False, "extra_values": extra_values},
                     method="POST",
                     formdata=self.extract_form_data(response),
                 )
@@ -181,42 +187,41 @@ class CtqScraperSpider(scrapy.Spider):
         def normalize(lines):
             return [line.strip() for line in lines if line.strip()]
 
-        def format_date(value: str):
+        def add_delimiter(value: str):
+            """Add delimiter (") for all string fields to prevent SQL database issues"""
             if not value:
                 return ""
-            value = value.strip()
-            
-            # Try different date formats and return with time if original had time
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
-                try:
-                    parsed_date = datetime.strptime(value, fmt)
-                    return parsed_date.strftime("%Y-%m-%d %H:%M")
-                except ValueError:
-                    continue
-            
-            # Try date-only formats
-            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d %B %Y", "%d %b %Y"):
-                try:
-                    parsed_date = datetime.strptime(value, fmt)
-                    return parsed_date.strftime("%Y-%m-%d")
-                except ValueError:
-                    continue
-            
-            # Try ISO format
-            try:
-                parsed_date = datetime.fromisoformat(value)
-                return parsed_date.strftime("%Y-%m-%d %H:%M")
-            except Exception:
-                pass
-            
-            # If all else fails, return original value
-            return value
+            return f'"{value}"'
+        
+        def extract_pays_from_address(address_lines):
+            """Extract text before postal code and add to pays column"""
+            pays = ""
+            if len(address_lines) > 2:
+                # Look for text before postal code in the last line
+                last_line = address_lines[-1]
+                # Extract postal code pattern (letters/numbers followed by postal code)
+                postal_pattern = r'[A-Za-z0-9\s]+(\d{5}|\d{3}\s?\d{3}|\d{2}\s?\d{3})'
+                match = re.search(postal_pattern, last_line)
+                if match:
+                    # Get text before the postal code
+                    postal_start = match.start()
+                    text_before_postal = last_line[:postal_start].strip()
+                    if text_before_postal:
+                        pays = text_before_postal
+            return pays
+        
+        def extract_date_as_is(value: str):
+            """Extract date value as-is from website without formatting"""
+            if not value:
+                return ""
+            return f'"{value.strip()}"'
 
         full_address_lines = normalize(
             response.xpath("//strong[normalize-space(.)=\"Adresse d'affaires\"]/following-sibling::p//text()").getall()
         )
         adresse = full_address_lines[0] if full_address_lines else ""
         ville = province = code_postal = ""
+        pays = extract_pays_from_address(full_address_lines)
 
         if len(full_address_lines) > 1:
             try:
@@ -226,24 +231,29 @@ class CtqScraperSpider(scrapy.Spider):
                 code_postal = parts[1].split(")")[1].strip()
             except Exception:
                 pass
+        
+        # Extract extra values from meta (passed from check_validity)
+        extra_values = response.meta.get("extra_values", "")
 
         base_item = {
             "neq": extract_text('//acronym[@title="Numéro d\'entreprise du Québec"]/following-sibling::p/text()') or neq,
-            "nom": extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()"),
-            "full_address": " ".join(full_address_lines),
-            "adresse": adresse,
-            "ville": ville,
-            "province": province,
-            "code_postal": code_postal,
-            "nir": next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), ""),
-            "titre": extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()"),
-            "categorie_transport": extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()"),
-            "date_inscription": format_date(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-            "date_prochaine_maj": format_date(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
-            "code_securite": extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()"),
-            "droit_circulation": extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()"),
-            "droit_exploiter": extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()"),
-            "motif": extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]"),
+            "nom": add_delimiter(extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()")),
+            "full_address": add_delimiter(" ".join(full_address_lines)),
+            "adresse": add_delimiter(adresse),
+            "ville": add_delimiter(ville),
+            "province": add_delimiter(province),
+            "code_postal": add_delimiter(code_postal),
+            "pays": add_delimiter(pays),
+            "nir": add_delimiter(next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), "")),
+            "titre": add_delimiter(extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()")),
+            "categorie_transport": add_delimiter(extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()")),
+            "date_inscription": extract_date_as_is(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
+            "date_prochaine_maj": extract_date_as_is(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+            "code_securite": add_delimiter(extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()")),
+            "droit_circulation": add_delimiter(extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()")),
+            "droit_exploiter": add_delimiter(extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()")),
+            "motif": add_delimiter(extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]")),
+            "extra_values": add_delimiter(extra_values),
             # Default VRAC fields (empty when no VRAC data)
             "vrac_numero_inscription": "",
             "vrac_region_exploitation": "",
@@ -277,14 +287,20 @@ class CtqScraperSpider(scrapy.Spider):
         # First extract VRAC data
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
+        
+        def add_delimiter(value: str):
+            """Add delimiter (") for all string fields to prevent SQL database issues"""
+            if not value:
+                return ""
+            return f'"{value}"'
 
         # Extract VRAC data from the correct table structure
         # Based on debug output: Cell 1,0: '7-C-505522', Cell 1,1: '', Cell 1,2: '2', Cell 1,3: 'VRAC-RICHELIEU'
         vrac_data = {
-            "vrac_numero_inscription": extract_text("(//table[@class='tableContenu']//tr[td]/td)[1]/text()"),
-            "vrac_region_exploitation": extract_text("(//table[@class='tableContenu']//tr[td]/td)[2]//a/text()"),
-            "vrac_nombre_camions": extract_text("(//table[@class='tableContenu']//tr[td]/td)[3]/text()"),
-            "vrac_nom_courtier": extract_text("(//table[@class='tableContenu']//tr[td]/td)[4]/text()"),
+            "vrac_numero_inscription": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[1]/text()")),
+            "vrac_region_exploitation": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[2]//a/text()")),
+            "vrac_nombre_camions": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[3]/text()")),
+            "vrac_nom_courtier": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[4]/text()")),
         }
         
         self.logger.debug(f"VRAC data extracted: {vrac_data}")
@@ -295,7 +311,7 @@ class CtqScraperSpider(scrapy.Spider):
             yield self.make_request(
                 url=urljoin("https://www.pes.ctq.gouv.qc.ca", ctq_action),
                 callback=self.parse_ctq_result_with_vrac,
-                meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "vrac_data": vrac_data},
+                meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "vrac_data": vrac_data, "extra_values": response.meta.get("extra_values", "")},
                 method="POST",
                 formdata=ctq_formdata,
             )
@@ -309,6 +325,7 @@ class CtqScraperSpider(scrapy.Spider):
                 "ville": "",
                 "province": "",
                 "code_postal": "",
+                "pays": "",
                 "nir": "",
                 "titre": "",
                 "categorie_transport": "",
@@ -318,6 +335,7 @@ class CtqScraperSpider(scrapy.Spider):
                 "droit_circulation": "",
                 "droit_exploiter": "",
                 "motif": "",
+                "extra_values": "",
             }
             base_item.update(vrac_data)
             yield base_item
@@ -332,42 +350,41 @@ class CtqScraperSpider(scrapy.Spider):
         def normalize(lines):
             return [line.strip() for line in lines if line.strip()]
 
-        def format_date(value: str):
+        def add_delimiter(value: str):
+            """Add delimiter (") for all string fields to prevent SQL database issues"""
             if not value:
                 return ""
-            value = value.strip()
-            
-            # Try different date formats and return with time if original had time
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
-                try:
-                    parsed_date = datetime.strptime(value, fmt)
-                    return parsed_date.strftime("%Y-%m-%d %H:%M")
-                except ValueError:
-                    continue
-            
-            # Try date-only formats
-            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d %B %Y", "%d %b %Y"):
-                try:
-                    parsed_date = datetime.strptime(value, fmt)
-                    return parsed_date.strftime("%Y-%m-%d")
-                except ValueError:
-                    continue
-            
-            # Try ISO format
-            try:
-                parsed_date = datetime.fromisoformat(value)
-                return parsed_date.strftime("%Y-%m-%d %H:%M")
-            except Exception:
-                pass
-            
-            # If all else fails, return original value
-            return value
+            return f'"{value}"'
+        
+        def extract_pays_from_address(address_lines):
+            """Extract text before postal code and add to pays column"""
+            pays = ""
+            if len(address_lines) > 2:
+                # Look for text before postal code in the last line
+                last_line = address_lines[-1]
+                # Extract postal code pattern (letters/numbers followed by postal code)
+                postal_pattern = r'[A-Za-z0-9\s]+(\d{5}|\d{3}\s?\d{3}|\d{2}\s?\d{3})'
+                match = re.search(postal_pattern, last_line)
+                if match:
+                    # Get text before the postal code
+                    postal_start = match.start()
+                    text_before_postal = last_line[:postal_start].strip()
+                    if text_before_postal:
+                        pays = text_before_postal
+            return pays
+        
+        def extract_date_as_is(value: str):
+            """Extract date value as-is from website without formatting"""
+            if not value:
+                return ""
+            return f'"{value.strip()}"'
 
         full_address_lines = normalize(
             response.xpath("//strong[normalize-space(.)=\"Adresse d'affaires\"]/following-sibling::p//text()").getall()
         )
         adresse = full_address_lines[0] if full_address_lines else ""
         ville = province = code_postal = ""
+        pays = extract_pays_from_address(full_address_lines)
 
         if len(full_address_lines) > 1:
             try:
@@ -377,24 +394,29 @@ class CtqScraperSpider(scrapy.Spider):
                 code_postal = parts[1].split(")")[1].strip()
             except Exception:
                 pass
+        
+        # Extract extra values from meta (passed from check_validity)
+        extra_values = response.meta.get("extra_values", "")
 
         base_item = {
             "neq": extract_text('//acronym[@title="Numéro d\'entreprise du Québec"]/following-sibling::p/text()') or neq,
-            "nom": extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()"),
-            "full_address": " ".join(full_address_lines),
-            "adresse": adresse,
-            "ville": ville,
-            "province": province,
-            "code_postal": code_postal,
-            "nir": next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), ""),
-            "titre": extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()"),
-            "categorie_transport": extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()"),
-            "date_inscription": format_date(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-            "date_prochaine_maj": format_date(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
-            "code_securite": extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()"),
-            "droit_circulation": extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()"),
-            "droit_exploiter": extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()"),
-            "motif": extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]"),
+            "nom": add_delimiter(extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()")),
+            "full_address": add_delimiter(" ".join(full_address_lines)),
+            "adresse": add_delimiter(adresse),
+            "ville": add_delimiter(ville),
+            "province": add_delimiter(province),
+            "code_postal": add_delimiter(code_postal),
+            "pays": add_delimiter(pays),
+            "nir": add_delimiter(next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), "")),
+            "titre": add_delimiter(extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()")),
+            "categorie_transport": add_delimiter(extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()")),
+            "date_inscription": extract_date_as_is(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
+            "date_prochaine_maj": extract_date_as_is(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+            "code_securite": add_delimiter(extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()")),
+            "droit_circulation": add_delimiter(extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()")),
+            "droit_exploiter": add_delimiter(extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()")),
+            "motif": add_delimiter(extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]")),
+            "extra_values": add_delimiter(extra_values),
         }
         
         # Add VRAC data to the base item
