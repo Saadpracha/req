@@ -25,7 +25,7 @@ NEWSPIDER_MODULE = "req_scrapers.spiders"
 # Use very conservative concurrency and a small randomized delay
 # CONCURRENT_REQUESTS = 8
 # CONCURRENT_REQUESTS_PER_DOMAIN = 1
-DOWNLOAD_DELAY = 0.2
+DOWNLOAD_DELAY = 0.1
 # RANDOMIZE_DOWNLOAD_DELAY = True
 
 # Disable cookies (avoid server-side tracking linkage across requests)
@@ -102,3 +102,6 @@ DOWNLOAD_TIMEOUT = 30
 # Set settings whose default value is deprecated to a future-proof value
 FEED_EXPORT_ENCODING = "utf-8-sig"
 LOG_LEVEL = "DEBUG"
+FEED_EXPORTERS = {
+    "csv": "req_scrapers.exporters.QuotedCsvItemExporter",
+}
