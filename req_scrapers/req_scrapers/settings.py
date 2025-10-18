@@ -27,7 +27,7 @@ NEWSPIDER_MODULE = "req_scrapers.spiders"
 # CONCURRENT_REQUESTS_PER_DOMAIN = 1
 # DOWNLOAD_DELAY = 1
 # RANDOMIZE_DOWNLOAD_DELAY = True
-DOWNLOAD_dELAY = 0.2
+DOWNLOAD_DELAY = 0.1
 
 # Disable cookies (avoid server-side tracking linkage across requests)
 # COOKIES_ENABLED = False
