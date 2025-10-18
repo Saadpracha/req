@@ -55,7 +55,7 @@ class ImmediateCSVPipeline:
         if self.writer is None:
             # Capture field order from current item
             self.fieldnames = list(adapter.asdict().keys())
-            self.writer = csv.DictWriter(self.file, fieldnames=self.fieldnames)
+            self.writer = csv.DictWriter(self.file, fieldnames=self.fieldnames, quoting=csv.QUOTE_ALL)
             if not self.header_written:
                 self.writer.writeheader()
                 self.header_written = True

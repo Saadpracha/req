@@ -187,11 +187,12 @@ class CtqScraperSpider(scrapy.Spider):
         def normalize(lines):
             return [line.strip() for line in lines if line.strip()]
 
-        def add_delimiter(value: str):
-            """Add delimiter (") for all string fields to prevent SQL database issues"""
+        def add_delimiter_for_dates(value: str):
+            """Add quote prefix to prevent Excel from auto-formatting dates"""
             if not value:
                 return ""
-            return f'"{value}"'
+            # Add single quote prefix to force Excel to treat as text
+            return f"'{value}"
         
         def extract_pays_from_address(address_lines):
             """Extract text before postal code and add to pays column"""
@@ -210,11 +211,6 @@ class CtqScraperSpider(scrapy.Spider):
                         pays = text_before_postal
             return pays
         
-        def extract_date_as_is(value: str):
-            """Extract date value as-is from website without formatting"""
-            if not value:
-                return ""
-            return f'"{value.strip()}"'
 
         full_address_lines = normalize(
             response.xpath("//strong[normalize-space(.)=\"Adresse d'affaires\"]/following-sibling::p//text()").getall()
@@ -237,23 +233,23 @@ class CtqScraperSpider(scrapy.Spider):
 
         base_item = {
             "neq": extract_text('//acronym[@title="Numéro d\'entreprise du Québec"]/following-sibling::p/text()') or neq,
-            "nom": add_delimiter(extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()")),
-            "full_address": add_delimiter(" ".join(full_address_lines)),
-            "adresse": add_delimiter(adresse),
-            "ville": add_delimiter(ville),
-            "province": add_delimiter(province),
-            "code_postal": add_delimiter(code_postal),
-            "pays": add_delimiter(pays),
-            "nir": add_delimiter(next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), "")),
-            "titre": add_delimiter(extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()")),
-            "categorie_transport": add_delimiter(extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()")),
-            "date_inscription": extract_date_as_is(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-            "date_prochaine_maj": extract_date_as_is(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
-            "code_securite": add_delimiter(extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()")),
-            "droit_circulation": add_delimiter(extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()")),
-            "droit_exploiter": add_delimiter(extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()")),
-            "motif": add_delimiter(extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]")),
-            "extra_values": add_delimiter(extra_values),
+            "nom": extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()"),
+            "full_address": " ".join(full_address_lines),
+            "adresse": adresse,
+            "ville": ville,
+            "province": province,
+            "code_postal": code_postal,
+            "pays": pays,
+            "nir": next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), ""),
+            "titre": extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()"),
+            "categorie_transport": extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()"),
+            "date_inscription": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
+            "date_prochaine_maj": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+            "code_securite": extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()"),
+            "droit_circulation": extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()"),
+            "droit_exploiter": extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()"),
+            "motif": extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]"),
+            "extra_values": extra_values,
             # Default VRAC fields (empty when no VRAC data)
             "vrac_numero_inscription": "",
             "vrac_region_exploitation": "",
@@ -287,20 +283,14 @@ class CtqScraperSpider(scrapy.Spider):
         # First extract VRAC data
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
-        
-        def add_delimiter(value: str):
-            """Add delimiter (") for all string fields to prevent SQL database issues"""
-            if not value:
-                return ""
-            return f'"{value}"'
 
         # Extract VRAC data from the correct table structure
         # Based on debug output: Cell 1,0: '7-C-505522', Cell 1,1: '', Cell 1,2: '2', Cell 1,3: 'VRAC-RICHELIEU'
         vrac_data = {
-            "vrac_numero_inscription": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[1]/text()")),
-            "vrac_region_exploitation": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[2]//a/text()")),
-            "vrac_nombre_camions": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[3]/text()")),
-            "vrac_nom_courtier": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[4]/text()")),
+            "vrac_numero_inscription": extract_text("(//table[@class='tableContenu']//tr[td]/td)[1]/text()"),
+            "vrac_region_exploitation": extract_text("(//table[@class='tableContenu']//tr[td]/td)[2]//a/text()"),
+            "vrac_nombre_camions": extract_text("(//table[@class='tableContenu']//tr[td]/td)[3]/text()"),
+            "vrac_nom_courtier": extract_text("(//table[@class='tableContenu']//tr[td]/td)[4]/text()"),
         }
         
         self.logger.debug(f"VRAC data extracted: {vrac_data}")
@@ -329,8 +319,8 @@ class CtqScraperSpider(scrapy.Spider):
                 "nir": "",
                 "titre": "",
                 "categorie_transport": "",
-                "date_inscription": "",
-                "date_prochaine_maj": "",
+                "date_inscription": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
+                "date_prochaine_maj": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
                 "code_securite": "",
                 "droit_circulation": "",
                 "droit_exploiter": "",
@@ -349,12 +339,13 @@ class CtqScraperSpider(scrapy.Spider):
 
         def normalize(lines):
             return [line.strip() for line in lines if line.strip()]
-
-        def add_delimiter(value: str):
-            """Add delimiter (") for all string fields to prevent SQL database issues"""
+        
+        def add_delimiter_for_dates(value: str):
+            """Add quote prefix to prevent Excel from auto-formatting dates"""
             if not value:
                 return ""
-            return f'"{value}"'
+            # Add single quote prefix to force Excel to treat as text
+            return f"'{value}"
         
         def extract_pays_from_address(address_lines):
             """Extract text before postal code and add to pays column"""
@@ -373,11 +364,6 @@ class CtqScraperSpider(scrapy.Spider):
                         pays = text_before_postal
             return pays
         
-        def extract_date_as_is(value: str):
-            """Extract date value as-is from website without formatting"""
-            if not value:
-                return ""
-            return f'"{value.strip()}"'
 
         full_address_lines = normalize(
             response.xpath("//strong[normalize-space(.)=\"Adresse d'affaires\"]/following-sibling::p//text()").getall()
@@ -400,23 +386,23 @@ class CtqScraperSpider(scrapy.Spider):
 
         base_item = {
             "neq": extract_text('//acronym[@title="Numéro d\'entreprise du Québec"]/following-sibling::p/text()') or neq,
-            "nom": add_delimiter(extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()")),
-            "full_address": add_delimiter(" ".join(full_address_lines)),
-            "adresse": add_delimiter(adresse),
-            "ville": add_delimiter(ville),
-            "province": add_delimiter(province),
-            "code_postal": add_delimiter(code_postal),
-            "pays": add_delimiter(pays),
-            "nir": add_delimiter(next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), "")),
-            "titre": add_delimiter(extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()")),
-            "categorie_transport": add_delimiter(extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()")),
-            "date_inscription": extract_date_as_is(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-            "date_prochaine_maj": extract_date_as_is(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
-            "code_securite": add_delimiter(extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()")),
-            "droit_circulation": add_delimiter(extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()")),
-            "droit_exploiter": add_delimiter(extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()")),
-            "motif": add_delimiter(extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]")),
-            "extra_values": add_delimiter(extra_values),
+            "nom": extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()"),
+            "full_address": " ".join(full_address_lines),
+            "adresse": adresse,
+            "ville": ville,
+            "province": province,
+            "code_postal": code_postal,
+            "pays": pays,
+            "nir": next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), ""),
+            "titre": extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()"),
+            "categorie_transport": extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()"),
+            "date_inscription": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
+            "date_prochaine_maj": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+            "code_securite": extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()"),
+            "droit_circulation": extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()"),
+            "droit_exploiter": extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()"),
+            "motif": extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]"),
+            "extra_values": extra_values,
         }
         
         # Add VRAC data to the base item
