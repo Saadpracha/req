@@ -1,5 +1,4 @@
 import csv
-import json
 import base64
 import re
 import scrapy
@@ -7,6 +6,7 @@ from scrapy.http import FormRequest
 from urllib.parse import urljoin
 from datetime import datetime
 from pathlib import Path
+import json
 
 
 class CtqScraperSpider(scrapy.Spider):
@@ -15,6 +15,19 @@ class CtqScraperSpider(scrapy.Spider):
     start_urls = ["https://www.pes.ctq.gouv.qc.ca/pes2/mvc/dossierclient"]
     custom_settings = {
         "LOG_LEVEL": "DEBUG",
+        "COOKIES_ENABLED": True,  # Enable cookies to maintain session
+        "DOWNLOAD_DELAY": 0.5,  # Add 1 second delay between requests to avoid rate limiting
+        "RANDOMIZE_DOWNLOAD_DELAY": 0.3,  # Randomize delay by 0.5 seconds
+        "USER_AGENT": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+        ),
+        "DEFAULT_REQUEST_HEADERS": {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
+                      "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Upgrade-Insecure-Requests": "1",
+        },
     }
 
     # Proxy state
@@ -25,6 +38,10 @@ class CtqScraperSpider(scrapy.Spider):
 
     def __init__(self, neqs=None, file=None, start_neq=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Print startup message to confirm debugging is enabled
+        print("\n" + "="*80, flush=True)
+        print("DEBUGGING MODE ENABLED - Full request/response logging active", flush=True)
+        print("="*80 + "\n", flush=True)
         self.neqs = neqs.split(",") if neqs else []
         if file:
             self.neqs.extend(self._load_neqs_from_file(file))
@@ -46,16 +63,34 @@ class CtqScraperSpider(scrapy.Spider):
                     if isinstance(loaded, list):
                         self.proxy_list = [str(x).strip() for x in loaded if str(x).strip()]
                         if self.proxy_list:
-                            self.logger.info(f"Loaded {len(self.proxy_list)} proxies from {proxies_path}")
-                            # Log first few proxies for debugging (without credentials)
-                            for i, proxy in enumerate(self.proxy_list[:3]):
-                                parts = proxy.split(":")
-                                if len(parts) >= 2:
-                                    self.logger.debug(f"Proxy {i+1}: {parts[0]}:{parts[1]}")
+                            print(f"{'='*80}", flush=True)
+                            print(f"PROXY CONFIGURATION: Loaded {len(self.proxy_list)} proxies from {proxies_path}", flush=True)
+                            self.logger.info(f"{'='*80}")
+                            self.logger.info(f"PROXY CONFIGURATION: Loaded {len(self.proxy_list)} proxies from {proxies_path}")
+                            # Log all proxies (masking passwords for security)
+                            for i, proxy_entry in enumerate(self.proxy_list):
+                                parts = proxy_entry.split(":")
+                                if len(parts) >= 4:
+                                    # Format: IP:PORT:USER:PASS
+                                    ip_port = f"{parts[0]}:{parts[1]}"
+                                    user = parts[2]
+                                    msg = f"  Proxy #{i+1}: {ip_port} (user: {user}, password: ***)"
+                                    print(msg, flush=True)
+                                    self.logger.info(msg)
+                                elif len(parts) >= 2:
+                                    # Format: IP:PORT
+                                    msg = f"  Proxy #{i+1}: {parts[0]}:{parts[1]} (no auth)"
+                                    print(msg, flush=True)
+                                    self.logger.info(msg)
                                 else:
-                                    self.logger.debug(f"Proxy {i+1}: {proxy}")
-                            if len(self.proxy_list) > 3:
-                                self.logger.debug(f"... and {len(self.proxy_list) - 3} more proxies")
+                                    msg = f"  Proxy #{i+1}: {proxy_entry}"
+                                    print(msg, flush=True)
+                                    self.logger.info(msg)
+                            msg = f"Proxy rotation will cycle through all {len(self.proxy_list)} proxies"
+                            print(msg, flush=True)
+                            print(f"{'='*80}", flush=True)
+                            self.logger.info(msg)
+                            self.logger.info(f"{'='*80}")
                     else:
                         self.logger.warning("proxies.json content is not a list; skipping proxies load")
             else:
@@ -65,7 +100,7 @@ class CtqScraperSpider(scrapy.Spider):
 
     def start_requests(self):
         for neq in self.neqs:
-            yield self.make_request(
+            yield from self.make_request(
                 url=self.start_urls[0],
                 callback=self.parse_initial,
                 meta={"neq": neq, "cookiejar": f"jar-{neq}"},
@@ -73,54 +108,90 @@ class CtqScraperSpider(scrapy.Spider):
 
     def parse_initial(self, response):
         neq = response.meta["neq"]
-        
+
         form_selector = response.xpath('//form[@id="mainForm"]')
         if not form_selector:
             return
 
-        inputs = form_selector.xpath('.//input[@name]')
-        formdata = {sel.xpath('@name').get(): sel.xpath('@value').get(default="") for sel in inputs}
-        formdata.update({
-            "mainForm:neq": str(neq),
-            "mainForm:j_id_32": "Rechercher",
-            "mainForm_SUBMIT": formdata.get("mainForm_SUBMIT", "1"),
-        })
-
-        action = form_selector.xpath('./@action').get()
-        if not action:
+        view_state = response.xpath('//input[@name="javax.faces.ViewState"]/@value').get()
+        if not view_state:
             return
 
-        post_url = urljoin("https://www.pes.ctq.gouv.qc.ca", action)
-        return self.make_request(
-            url=post_url,
-            callback=self.check_validity,
-            meta={"neq": neq, "cookiejar": response.meta.get("cookiejar")},
+        first_request_payload = {
+            "mainForm:typeDroit": "",
+            "mainForm:personnePhysique": "",
+            "mainForm:municipalite": "",
+            "mainForm:municipaliteHorsQuebec": "",
+            "mainForm:neq": str(neq),
+            "mainForm:nir": "",
+            "mainForm:ni": "",
+            "mainForm:ner": "",
+            "mainForm:nar": "",
+            "mainForm:numeroPermis": "",
+            "mainForm:numeroDemande": "",
+            "mainForm:numeroDossier": "",
+            "mainForm:j_id_32": "Rechercher",
+            "mainForm_SUBMIT": "1",
+            "javax.faces.ViewState": view_state,
+        }
+
+        headers = {
+            "Origin": "https://www.pes.ctq.gouv.qc.ca",
+            "Referer": response.url,
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        
+        req_meta = {
+            "neq": neq,
+            "cookiejar": response.meta.get("cookiejar"),
+            "dont_retry": True,
+            "handle_httpstatus_list": [400, 401, 403, 404, 429, 500, 502, 503, 504],
+        }
+        
+        if self.proxy_list:
+            proxy = self._next_proxy()
+            if proxy["user"] and proxy["pass"]:
+                creds = f"{proxy['user']}:{proxy['pass']}"
+                headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
+            req_meta["proxy"] = f"http://{proxy['ip']}"
+
+        yield scrapy.FormRequest(
+            url=response.url,
+            formdata=first_request_payload,
+            headers=headers,
             method="POST",
-            formdata=formdata,
+            callback=self.check_validity,
+            meta=req_meta,
+            dont_filter=True,
         )
 
     def check_validity(self, response):
         neq = response.meta["neq"]
+        
+        if response.status == 401 or not response.body:
+            return
+        
+        view_state = response.xpath('//input[@name="javax.faces.ViewState"]/@value').get()
+        redirect_execution = view_state if view_state else "e1s2"
+        
         ctq_action = response.xpath('//form[@id="mainForm"]/@action').get()
         if not ctq_action:
             return
 
         if response.xpath('//h6[contains(text(),"Erreur(s)")]'):
-            return  # Invalid NEQ
+            return
 
         match_text = response.xpath('//acronym/following-sibling::p/text()').get()
         if match_text == neq:
-            # Extract extra values from xpath (//div[@class="client"])[1]/ul/li/a/text()
             extra_values_list = response.xpath('(//div[@class="client"])[1]/ul/li/a/text()').getall()
             extra_values = ",".join([val.strip() for val in extra_values_list if val.strip()])
             
-            # Check for VRAC onclick before proceeding with CTQ data
             vrac_onclick = response.xpath('(//a[contains(text(),"Registre du camionnage en vrac")])[1]/@onclick').get()
-            self.logger.debug(f"VRAC onclick: {vrac_onclick}")
             
             if vrac_onclick:
-                # If VRAC link found, make POST request to get VRAC data first, then CTQ data
-                vrac_payload = {
+                vrac_second_request_payload = {
+                    "mainForm_SUBMIT": "1",
+                    "javax.faces.ViewState": redirect_execution,
                     "leClientNo": "4007",
                     "leContexte": "VRAC",
                     "leOrderBy": "",
@@ -128,28 +199,91 @@ class CtqScraperSpider(scrapy.Spider):
                     "leContexteEstDejaDetermine": "oui",
                     "leDdrSeq": "0",
                     "mainForm:_idcl": "mainForm:j_id_z_8_2",
-                    "mainForm_SUBMIT": response.xpath('//form//input[@name="mainForm_SUBMIT"]/@value').get(),
-                    "javax.faces.ViewState": response.xpath('//form//input[@id="javax.faces.ViewState"]/@value').get(),
                 }
                 
-                return self.make_request(
-                    url=response.url,
-                    callback=self.parse_vrac_result,
-                    meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "has_vrac": True, "ctq_action": ctq_action, "ctq_formdata": self.extract_form_data(response), "extra_values": extra_values},
+                second_request_url = response.url
+                if "execution=" not in second_request_url:
+                    separator = "&" if "?" in second_request_url else "?"
+                    second_request_url = f"{second_request_url}{separator}execution={redirect_execution}"
+                else:
+                    second_request_url = re.sub(r'execution=[^&;]*', f'execution={redirect_execution}', second_request_url)
+                
+                headers = {
+                    "Origin": "https://www.pes.ctq.gouv.qc.ca",
+                    "Referer": response.url,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                }
+                
+                req_meta = {
+                    "neq": neq,
+                    "cookiejar": response.meta.get("cookiejar"),
+                    "has_vrac": True,
+                    "ctq_action": ctq_action,
+                    "ctq_formdata": self.extract_form_data(response, redirect_execution),
+                    "extra_values": extra_values,
+                    "dont_retry": True,
+                    "handle_httpstatus_list": [400, 401, 403, 404, 429, 500, 502, 503, 504],
+                }
+                
+                if self.proxy_list:
+                    proxy = self._next_proxy()
+                    if proxy["user"] and proxy["pass"]:
+                        creds = f"{proxy['user']}:{proxy['pass']}"
+                        headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
+                    req_meta["proxy"] = f"http://{proxy['ip']}"
+                
+                yield scrapy.FormRequest(
+                    url=second_request_url,
+                    formdata=vrac_second_request_payload,
+                    headers=headers,
                     method="POST",
-                    formdata=vrac_payload,
+                    callback=self.parse_vrac_result,
+                    meta=req_meta,
+                    dont_filter=True,
                 )
             else:
-                # No VRAC link found, proceed with normal CTQ data extraction
-                return self.make_request(
-                    url=urljoin("https://www.pes.ctq.gouv.qc.ca", ctq_action),
-                    callback=self.parse_ctq_result,
-                    meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "has_vrac": False, "extra_values": extra_values},
+                ctq_second_request_payload = self.extract_form_data(response, redirect_execution)
+                
+                second_request_url = urljoin("https://www.pes.ctq.gouv.qc.ca", ctq_action)
+                if "execution=" not in second_request_url:
+                    separator = "&" if "?" in second_request_url else "?"
+                    second_request_url = f"{second_request_url}{separator}execution={redirect_execution}"
+                else:
+                    second_request_url = re.sub(r'execution=[^&;]*', f'execution={redirect_execution}', second_request_url)
+                
+                headers = {
+                    "Origin": "https://www.pes.ctq.gouv.qc.ca",
+                    "Referer": response.url,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                }
+                
+                req_meta = {
+                    "neq": neq,
+                    "cookiejar": response.meta.get("cookiejar"),
+                    "has_vrac": False,
+                    "extra_values": extra_values,
+                    "dont_retry": True,
+                    "handle_httpstatus_list": [400, 401, 403, 404, 429, 500, 502, 503, 504],
+                }
+                
+                if self.proxy_list:
+                    proxy = self._next_proxy()
+                    if proxy["user"] and proxy["pass"]:
+                        creds = f"{proxy['user']}:{proxy['pass']}"
+                        headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
+                    req_meta["proxy"] = f"http://{proxy['ip']}"
+                
+                yield scrapy.FormRequest(
+                    url=second_request_url,
+                    formdata=ctq_second_request_payload,
+                    headers=headers,
                     method="POST",
-                    formdata=self.extract_form_data(response),
+                    callback=self.parse_ctq_result,
+                    meta=req_meta,
+                    dont_filter=True,
                 )
 
-    def extract_form_data(self, response):
+    def extract_form_data(self, response, execution=None):
         onclick = response.xpath("//a[contains(@onclick, 'PECVL')]/@onclick").get()
         params = {}
         target_id = None
@@ -166,9 +300,18 @@ class CtqScraperSpider(scrapy.Spider):
             except Exception:
                 pass
 
-        return {
-            "mainForm_SUBMIT": response.xpath('//form//input[@name="mainForm_SUBMIT"]/@value').get(),
-            "javax.faces.ViewState": response.xpath('//form//input[@id="javax.faces.ViewState"]/@value').get(),
+        # Use execution parameter if provided, otherwise extract from response
+        view_state = execution
+        if not view_state:
+            view_state = response.xpath('//form//input[@id="javax.faces.ViewState"]/@value').get()
+        if not view_state:
+            view_state = "1"  # Default fallback
+
+        # Build a completely separate payload for the second request
+        # This is a strict, individual payload - not updating the same variable
+        second_request_payload = {
+            "mainForm_SUBMIT": "1",
+            "javax.faces.ViewState": view_state,
             "leClientNo": params.get("leClientNo", "129540"),
             "leContexte": params.get("leContexte", "PECVL"),
             "leOrderBy": params.get("leOrderBy", ""),
@@ -177,6 +320,8 @@ class CtqScraperSpider(scrapy.Spider):
             "leDdrSeq": params.get("leDdrSeq", "0"),
             "mainForm:_idcl": target_id or "mainForm:j_id_z_7_2",
         }
+        
+        return second_request_payload
 
     def parse_ctq_result(self, response):
         neq = response.meta["neq"]
@@ -187,12 +332,11 @@ class CtqScraperSpider(scrapy.Spider):
         def normalize(lines):
             return [line.strip() for line in lines if line.strip()]
 
-        def add_delimiter_for_dates(value: str):
-            """Add quote prefix to prevent Excel from auto-formatting dates"""
+        def add_delimiter(value: str):
+            """Return value as-is (CSV exporter will handle quoting)"""
             if not value:
                 return ""
-            # Add single quote prefix to force Excel to treat as text
-            return f"'{value}"
+            return value
         
         def extract_pays_from_address(address_lines):
             """Extract text before postal code and add to pays column"""
@@ -211,6 +355,11 @@ class CtqScraperSpider(scrapy.Spider):
                         pays = text_before_postal
             return pays
         
+        def extract_date_as_is(value: str):
+            """Extract date value as-is from website without formatting"""
+            if not value:
+                return ""
+            return value.strip()
 
         full_address_lines = normalize(
             response.xpath("//strong[normalize-space(.)=\"Adresse d'affaires\"]/following-sibling::p//text()").getall()
@@ -233,23 +382,23 @@ class CtqScraperSpider(scrapy.Spider):
 
         base_item = {
             "neq": extract_text('//acronym[@title="Numéro d\'entreprise du Québec"]/following-sibling::p/text()') or neq,
-            "nom": extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()"),
-            "full_address": " ".join(full_address_lines),
-            "adresse": adresse,
-            "ville": ville,
-            "province": province,
-            "code_postal": code_postal,
-            "pays": pays,
-            "nir": next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), ""),
-            "titre": extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()"),
-            "categorie_transport": extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()"),
-            "date_inscription": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-            "date_prochaine_maj": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
-            "code_securite": extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()"),
-            "droit_circulation": extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()"),
-            "droit_exploiter": extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()"),
-            "motif": extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]"),
-            "extra_values": extra_values,
+            "nom": add_delimiter(extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()")),
+            "full_address": add_delimiter(" ".join(full_address_lines)),
+            "adresse": add_delimiter(adresse),
+            "ville": add_delimiter(ville),
+            "province": add_delimiter(province),
+            "code_postal": add_delimiter(code_postal),
+            "pays": add_delimiter(pays),
+            "nir": add_delimiter(next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), "")),
+            "titre": add_delimiter(extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()")),
+            "categorie_transport": add_delimiter(extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()")),
+            "date_inscription": extract_date_as_is(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
+            "date_prochaine_maj": extract_date_as_is(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+            "code_securite": add_delimiter(extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()")),
+            "droit_circulation": add_delimiter(extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()")),
+            "droit_exploiter": add_delimiter(extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()")),
+            "motif": add_delimiter(extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]")),
+            "extra_values": add_delimiter(extra_values),
             # Default VRAC fields (empty when no VRAC data)
             "vrac_numero_inscription": "",
             "vrac_region_exploitation": "",
@@ -271,8 +420,7 @@ class CtqScraperSpider(scrapy.Spider):
                 key, value = row.replace("'", "").split(",")
                 params[key] = value
             return params, target_id
-        except Exception as e:
-            self.logger.warning(f"Failed to extract onclick form data: {e}")
+        except Exception:
             return {}, None
 
     def parse_vrac_result(self, response):
@@ -280,30 +428,55 @@ class CtqScraperSpider(scrapy.Spider):
         ctq_action = response.meta["ctq_action"]
         ctq_formdata = response.meta["ctq_formdata"]
         
-        # First extract VRAC data
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
+        
+        def add_delimiter(value: str):
+            """Return value as-is (CSV exporter will handle quoting)"""
+            if not value:
+                return ""
+            return value
 
-        # Extract VRAC data from the correct table structure
-        # Based on debug output: Cell 1,0: '7-C-505522', Cell 1,1: '', Cell 1,2: '2', Cell 1,3: 'VRAC-RICHELIEU'
         vrac_data = {
-            "vrac_numero_inscription": extract_text("(//table[@class='tableContenu']//tr[td]/td)[1]/text()"),
-            "vrac_region_exploitation": extract_text("(//table[@class='tableContenu']//tr[td]/td)[2]//a/text()"),
-            "vrac_nombre_camions": extract_text("(//table[@class='tableContenu']//tr[td]/td)[3]/text()"),
-            "vrac_nom_courtier": extract_text("(//table[@class='tableContenu']//tr[td]/td)[4]/text()"),
+            "vrac_numero_inscription": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[1]/text()")),
+            "vrac_region_exploitation": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[2]//a/text()")),
+            "vrac_nombre_camions": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[3]/text()")),
+            "vrac_nom_courtier": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[4]/text()")),
         }
         
-        self.logger.debug(f"VRAC data extracted: {vrac_data}")
-        
-        # Now get CTQ data using the stored form data
         if ctq_action:
-            self.logger.debug(f"Making CTQ request with action: {ctq_action}")
-            yield self.make_request(
-                url=urljoin("https://www.pes.ctq.gouv.qc.ca", ctq_action),
-                callback=self.parse_ctq_result_with_vrac,
-                meta={"neq": neq, "cookiejar": response.meta.get("cookiejar"), "vrac_data": vrac_data, "extra_values": response.meta.get("extra_values", "")},
-                method="POST",
+            ctq_url = urljoin("https://www.pes.ctq.gouv.qc.ca", ctq_action)
+            
+            headers = {
+                "Origin": "https://www.pes.ctq.gouv.qc.ca",
+                "Referer": response.url,
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            
+            req_meta = {
+                "neq": neq,
+                "cookiejar": response.meta.get("cookiejar"),
+                "vrac_data": vrac_data,
+                "extra_values": response.meta.get("extra_values", ""),
+                "dont_retry": True,
+                "handle_httpstatus_list": [400, 401, 403, 404, 429, 500, 502, 503, 504],
+            }
+            
+            if self.proxy_list:
+                proxy = self._next_proxy()
+                if proxy["user"] and proxy["pass"]:
+                    creds = f"{proxy['user']}:{proxy['pass']}"
+                    headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
+                req_meta["proxy"] = f"http://{proxy['ip']}"
+            
+            yield scrapy.FormRequest(
+                url=ctq_url,
                 formdata=ctq_formdata,
+                headers=headers,
+                method="POST",
+                callback=self.parse_ctq_result_with_vrac,
+                meta=req_meta,
+                dont_filter=True,
             )
         else:
             # If no CTQ action, create a minimal item with VRAC data
@@ -319,8 +492,8 @@ class CtqScraperSpider(scrapy.Spider):
                 "nir": "",
                 "titre": "",
                 "categorie_transport": "",
-                "date_inscription": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-                "date_prochaine_maj": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+                "date_inscription": "",
+                "date_prochaine_maj": "",
                 "code_securite": "",
                 "droit_circulation": "",
                 "droit_exploiter": "",
@@ -339,13 +512,12 @@ class CtqScraperSpider(scrapy.Spider):
 
         def normalize(lines):
             return [line.strip() for line in lines if line.strip()]
-        
-        def add_delimiter_for_dates(value: str):
-            """Add quote prefix to prevent Excel from auto-formatting dates"""
+
+        def add_delimiter(value: str):
+            """Return value as-is (CSV exporter will handle quoting)"""
             if not value:
                 return ""
-            # Add single quote prefix to force Excel to treat as text
-            return f"'{value}"
+            return value
         
         def extract_pays_from_address(address_lines):
             """Extract text before postal code and add to pays column"""
@@ -364,6 +536,11 @@ class CtqScraperSpider(scrapy.Spider):
                         pays = text_before_postal
             return pays
         
+        def extract_date_as_is(value: str):
+            """Extract date value as-is from website without formatting"""
+            if not value:
+                return ""
+            return value.strip()
 
         full_address_lines = normalize(
             response.xpath("//strong[normalize-space(.)=\"Adresse d'affaires\"]/following-sibling::p//text()").getall()
@@ -386,23 +563,23 @@ class CtqScraperSpider(scrapy.Spider):
 
         base_item = {
             "neq": extract_text('//acronym[@title="Numéro d\'entreprise du Québec"]/following-sibling::p/text()') or neq,
-            "nom": extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()"),
-            "full_address": " ".join(full_address_lines),
-            "adresse": adresse,
-            "ville": ville,
-            "province": province,
-            "code_postal": code_postal,
-            "pays": pays,
-            "nir": next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), ""),
-            "titre": extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()"),
-            "categorie_transport": extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()"),
-            "date_inscription": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-            "date_prochaine_maj": add_delimiter_for_dates(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
-            "code_securite": extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()"),
-            "droit_circulation": extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()"),
-            "droit_exploiter": extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()"),
-            "motif": extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]"),
-            "extra_values": extra_values,
+            "nom": add_delimiter(extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()")),
+            "full_address": add_delimiter(" ".join(full_address_lines)),
+            "adresse": add_delimiter(adresse),
+            "ville": add_delimiter(ville),
+            "province": add_delimiter(province),
+            "code_postal": add_delimiter(code_postal),
+            "pays": add_delimiter(pays),
+            "nir": add_delimiter(next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), "")),
+            "titre": add_delimiter(extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()")),
+            "categorie_transport": add_delimiter(extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()")),
+            "date_inscription": extract_date_as_is(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
+            "date_prochaine_maj": extract_date_as_is(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+            "code_securite": add_delimiter(extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()")),
+            "droit_circulation": add_delimiter(extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()")),
+            "droit_exploiter": add_delimiter(extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()")),
+            "motif": add_delimiter(extract_text("//strong[normalize-space(.)='Motif']/following-sibling::p//text()[1]")),
+            "extra_values": add_delimiter(extra_values),
         }
         
         # Add VRAC data to the base item
@@ -419,8 +596,8 @@ class CtqScraperSpider(scrapy.Spider):
                     val = row.get("NEQ") or next((v for k, v in row.items() if k.lower().strip() == "neq"), None)
                     if val and str(val).strip():
                         values.append(str(val).strip())
-        except Exception as e:
-            self.logger.warning(f"Error loading NEQs from file: {e}")
+        except Exception:
+            pass
         return values
 
     # ------------------------
@@ -442,49 +619,47 @@ class CtqScraperSpider(scrapy.Spider):
         if not self.proxy_list:
             return {"ip": "", "user": "", "pass": ""}
         self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
-        proxy = self.get_proxy_creds(self.current_proxy_index)
-        self.logger.debug(f"Rotated to proxy index {self.current_proxy_index}: {proxy['ip']}")
-        return proxy
+        return self.get_proxy_creds(self.current_proxy_index)
 
     def make_request(self, url, callback, meta=None, method="GET", formdata=None):
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Connection": "close",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Cache-Control": "max-age=0",
         }
+        
+        if meta and meta.get("referer"):
+            headers["Referer"] = meta.get("referer")
 
         req_meta = {
             **(meta or {}),
             "dont_retry": True,
-            "handle_httpstatus_list": [400, 403, 404, 429, 500, 502, 503, 504],
+            "handle_httpstatus_list": [400, 401, 403, 404, 429, 500, 502, 503, 504],
         }
 
-        # Rotate proxy on every request
         if self.proxy_list:
             proxy = self._next_proxy()
             if proxy["user"] and proxy["pass"]:
                 creds = f"{proxy['user']}:{proxy['pass']}"
                 headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
-                self.logger.debug(f"Using authenticated proxy: {proxy['ip']} (user: {proxy['user']})")
             else:
                 try:
                     del headers["Proxy-Authorization"]
                 except Exception:
                     pass
-                self.logger.debug(f"Using proxy: {proxy['ip']}")
             req_meta["proxy"] = f"http://{proxy['ip']}"
-        else:
-            self.logger.debug("No proxies available - using direct connection")
 
         self.total_requests += 1
         
-        # Log request details
-        neq = meta.get("neq", "unknown") if meta else "unknown"
-        self.logger.debug(f"Request #{self.total_requests} for NEQ {neq}: {method} {url}")
-
         if method.upper() == "POST":
-            return scrapy.FormRequest(
+            yield scrapy.FormRequest(
                 url=url,
                 method="POST",
                 formdata=formdata or {},
@@ -495,7 +670,7 @@ class CtqScraperSpider(scrapy.Spider):
                 dont_filter=True,
             )
         else:
-            return scrapy.Request(
+            yield scrapy.Request(
                 url=url,
                 headers=headers,
                 meta=req_meta,
@@ -507,37 +682,24 @@ class CtqScraperSpider(scrapy.Spider):
     def handle_error(self, failure):
         req = getattr(failure, "request", None)
         if not req:
-            self.logger.error("Failure missing request: %s", failure)
             self.errors += 1
             return
 
         if self.proxy_list:
             proxy = self._next_proxy()
-
-            # Update meta with new proxy
             new_meta = dict(req.meta)
             new_meta["proxy"] = f"http://{proxy['ip']}"
 
-            # Update headers with new Proxy-Authorization if needed
             if proxy["user"] and proxy["pass"]:
                 creds = f"{proxy['user']}:{proxy['pass']}"
                 auth_value = "Basic " + base64.b64encode(creds.encode()).decode()
                 req.headers["Proxy-Authorization"] = auth_value
-                self.logger.warning(
-                    "Request failed: %s — rotating to authenticated proxy: %s (user: %s) and retrying",
-                    req.url, proxy['ip'], proxy['user']
-                )
             else:
                 try:
                     del req.headers["Proxy-Authorization"]
                 except Exception:
                     pass
-                self.logger.warning(
-                    "Request failed: %s — rotating to proxy: %s and retrying",
-                    req.url, proxy['ip']
-                )
 
             yield req.replace(meta=new_meta, dont_filter=True)
         else:
-            self.logger.error("Request failed and no proxies available: %s", req.url)
             self.errors += 1
