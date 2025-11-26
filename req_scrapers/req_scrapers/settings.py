@@ -27,7 +27,7 @@ NEWSPIDER_MODULE = "req_scrapers.spiders"
 # CONCURRENT_REQUESTS_PER_DOMAIN = 1
 DOWNLOAD_DELAY = 1
 RANDOMIZE_DOWNLOAD_DELAY = True
-ZYTE_API_EXPERIMENTAL_COOKIES_ENABLED = True
+# ZYTE_API_EXPERIMENTAL_COOKIES_ENABLED = True
 # DOWNLOAD_DELAY = 1
 
 # Disable cookies (avoid server-side tracking linkage across requests)

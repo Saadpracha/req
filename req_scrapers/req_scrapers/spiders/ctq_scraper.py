@@ -16,7 +16,7 @@ class CtqScraperSpider(scrapy.Spider):
     custom_settings = {
         "LOG_LEVEL": "DEBUG",
         "COOKIES_ENABLED": True,  # Enable cookies to maintain session
-        "DOWNLOAD_DELAY": 0.5,  # Add 1 second delay between requests to avoid rate limiting
+        "DOWNLOAD_DELAY": 0.65,  # Add 1 second delay between requests to avoid rate limiting
         "RANDOMIZE_DOWNLOAD_DELAY": 0.3,  # Randomize delay by 0.5 seconds
         "USER_AGENT": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
