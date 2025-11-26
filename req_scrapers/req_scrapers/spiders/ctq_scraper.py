@@ -337,7 +337,7 @@ class CtqScraperSpider(scrapy.Spider):
             if not value:
                 return ""
             return value
-        
+
         def extract_pays_from_address(address_lines):
             """Extract text before postal code and add to pays column"""
             pays = ""
@@ -355,12 +355,6 @@ class CtqScraperSpider(scrapy.Spider):
                         pays = text_before_postal
             return pays
         
-        def extract_date_as_is(value: str):
-            """Extract date value as-is from website without formatting"""
-            if not value:
-                return ""
-            return value.strip()
-
         full_address_lines = normalize(
             response.xpath("//strong[normalize-space(.)=\"Adresse d'affaires\"]/following-sibling::p//text()").getall()
         )
@@ -380,6 +374,13 @@ class CtqScraperSpider(scrapy.Spider):
         # Extract extra values from meta (passed from check_validity)
         extra_values = response.meta.get("extra_values", "")
 
+        date_inscription = response.xpath(
+            "(//strong[contains(text(),\"Date d'inscription au registre\")]/following-sibling::p/text())[1]"
+        ).get(default="").strip()
+        date_prochaine_maj = response.xpath(
+            "(//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text())[1]"
+        ).get(default="").strip()
+
         base_item = {
             "neq": extract_text('//acronym[@title="Numéro d\'entreprise du Québec"]/following-sibling::p/text()') or neq,
             "nom": add_delimiter(extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()")),
@@ -392,8 +393,8 @@ class CtqScraperSpider(scrapy.Spider):
             "nir": add_delimiter(next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), "")),
             "titre": add_delimiter(extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()")),
             "categorie_transport": add_delimiter(extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()")),
-            "date_inscription": extract_date_as_is(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-            "date_prochaine_maj": extract_date_as_is(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+            "date_inscription": self._format_excel_text(date_inscription),
+            "date_prochaine_maj": self._format_excel_text(date_prochaine_maj),
             "code_securite": add_delimiter(extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()")),
             "droit_circulation": add_delimiter(extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()")),
             "droit_exploiter": add_delimiter(extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()")),
@@ -436,6 +437,7 @@ class CtqScraperSpider(scrapy.Spider):
             if not value:
                 return ""
             return value
+
 
         vrac_data = {
             "vrac_numero_inscription": add_delimiter(extract_text("(//table[@class='tableContenu']//tr[td]/td)[1]/text()")),
@@ -536,12 +538,6 @@ class CtqScraperSpider(scrapy.Spider):
                         pays = text_before_postal
             return pays
         
-        def extract_date_as_is(value: str):
-            """Extract date value as-is from website without formatting"""
-            if not value:
-                return ""
-            return value.strip()
-
         full_address_lines = normalize(
             response.xpath("//strong[normalize-space(.)=\"Adresse d'affaires\"]/following-sibling::p//text()").getall()
         )
@@ -561,6 +557,13 @@ class CtqScraperSpider(scrapy.Spider):
         # Extract extra values from meta (passed from check_validity)
         extra_values = response.meta.get("extra_values", "")
 
+        date_inscription = response.xpath(
+            "(//strong[contains(text(),\"Date d'inscription au registre\")]/following-sibling::p/text())[1]"
+        ).get(default="").strip()
+        date_prochaine_maj = response.xpath(
+            "(//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text())[1]"
+        ).get(default="").strip()
+
         base_item = {
             "neq": extract_text('//acronym[@title="Numéro d\'entreprise du Québec"]/following-sibling::p/text()') or neq,
             "nom": add_delimiter(extract_text("//strong[normalize-space(.)='Nom']/following-sibling::p/text()")),
@@ -573,8 +576,8 @@ class CtqScraperSpider(scrapy.Spider):
             "nir": add_delimiter(next((val.strip() for val in response.xpath('(//acronym[@title="Numéro d\'identification au Registre"])[1]/following-sibling::p[1]/text()').getall() if val.strip().startswith("R-")), "")),
             "titre": add_delimiter(extract_text("//strong[normalize-space(.)='Titre']/following-sibling::p/text()")),
             "categorie_transport": add_delimiter(extract_text("//strong[normalize-space(.)='Catégorie de transport']/following-sibling::p/text()")),
-            "date_inscription": extract_date_as_is(extract_text("//strong[normalize-space(.)=\"Date d'inscription au registre\"]/following-sibling::p/text()")),
-            "date_prochaine_maj": extract_date_as_is(extract_text("//strong[normalize-space(.)='Date limite de la prochaine mise à jour']/following-sibling::p/text()")),
+            "date_inscription": self._format_excel_text(date_inscription),
+            "date_prochaine_maj": self._format_excel_text(date_prochaine_maj),
             "code_securite": add_delimiter(extract_text("//strong[normalize-space(.)='Cote de sécurité']/following-sibling::p/text()")),
             "droit_circulation": add_delimiter(extract_text("//strong[normalize-space(.)='Droit de mettre en circulation (Propriétaire)']/following-sibling::p/text()")),
             "droit_exploiter": add_delimiter(extract_text("//strong[normalize-space(.)=\"Droit d'exploiter (Exploitant)\"]/following-sibling::p/text()")),
@@ -621,6 +624,13 @@ class CtqScraperSpider(scrapy.Spider):
         self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
         return self.get_proxy_creds(self.current_proxy_index)
 
+    @staticmethod
+    def _format_excel_text(value: str):
+        """Prefix value to prevent Excel from auto-formatting"""
+        if not value:
+            return ""
+        return f"{value}"
+
     def make_request(self, url, callback, meta=None, method="GET", formdata=None):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -655,6 +665,7 @@ class CtqScraperSpider(scrapy.Spider):
                 except Exception:
                     pass
             req_meta["proxy"] = f"http://{proxy['ip']}"
+            self.logger.debug(f"Using proxy {req_meta['proxy']} for {url}")
 
         self.total_requests += 1
         
