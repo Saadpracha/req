@@ -13,11 +13,7 @@ class CtqScraperSpider(scrapy.Spider):
     name = "ctq_scraper"
     allowed_domains = ["pes.ctq.gouv.qc.ca"]
     start_urls = ["https://www.pes.ctq.gouv.qc.ca/pes2/mvc/dossierclient"]
-    custom_settings = {
-        "LOG_LEVEL": "DEBUG",
-        "COOKIES_ENABLED": True,  # Enable cookies to maintain session
-        "DOWNLOAD_DELAY": 0.65,  # Add 1 second delay between requests to avoid rate limiting
-        "RANDOMIZE_DOWNLOAD_DELAY": 0.3,  # Randomize delay by 0.5 seconds
+    custom_settings = {  # Randomize delay by 0.5 seconds
         "USER_AGENT": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
