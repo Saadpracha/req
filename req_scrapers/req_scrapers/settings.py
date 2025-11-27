@@ -23,7 +23,7 @@ NEWSPIDER_MODULE = "req_scrapers.spiders"
 
 # Concurrency and throttling settings (be polite; reduce ban risk)
 # Use very conservative concurrency and a small randomized delay
-# CONCURRENT_REQUESTS = 8
+CONCURRENT_REQUESTS = 8
 # CONCURRENT_REQUESTS_PER_DOMAIN = 1
 DOWNLOAD_DELAY = 1
 RANDOMIZE_DOWNLOAD_DELAY = True
