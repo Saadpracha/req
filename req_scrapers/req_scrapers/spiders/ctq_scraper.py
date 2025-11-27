@@ -120,6 +120,13 @@ class CtqScraperSpider(scrapy.Spider):
 
     def start_requests(self):
         for neq in self.neqs:
+            proxy_info = "none"
+            if self.proxy_list:
+                # Preview which proxy will be used (next one in rotation)
+                next_index = (self.current_proxy_index + 1) % len(self.proxy_list)
+                proxy_preview = self.get_proxy_creds(next_index)
+                proxy_info = proxy_preview['ip'].split(':')[0] if proxy_preview['ip'] else "none"
+            self.logger.info(f"➡️ [REQUEST] Starting initial GET | NEQ={neq} | Proxy={proxy_info}")
             self.logger.debug(f"Starting request for NEQ {neq} to {self.start_urls[0]}")
             yield from self.make_request(
                 url=self.start_urls[0],
@@ -130,14 +137,31 @@ class CtqScraperSpider(scrapy.Spider):
     def parse_initial(self, response):
         neq = response.meta["neq"]
         
-        # Enhanced debugging for initial response
+        # Enhanced debugging for initial response with prominent status code
         proxy_used = response.meta.get("proxy", "none")
-        self.logger.debug(f"parse_initial: NEQ {neq}, status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        status = response.status
+        body_size = len(response.body) if response.body else 0
         
-        if response.status != 200:
-            self.logger.warning(f"Non-200 status code {response.status} in parse_initial for NEQ {neq} with proxy {proxy_used}")
+        # Extract proxy IP for cleaner logging
+        proxy_ip = "none"
+        if proxy_used != "none" and proxy_used:
+            try:
+                proxy_ip = proxy_used.split("://")[1].split(":")[0] if "://" in proxy_used else proxy_used.split(":")[0]
+            except:
+                proxy_ip = proxy_used
+        
+        status_emoji = "✅" if status == 200 else "⚠️" if 400 <= status < 500 else "❌"
+        self.logger.info(f"{status_emoji} [parse_initial] STATUS={status} | NEQ={neq} | Proxy={proxy_ip} | BodySize={body_size}")
+        self.logger.debug(f"parse_initial: NEQ {neq}, status={status}, proxy={proxy_used}, body_size={body_size}")
+        
+        if status != 200:
+            self.logger.warning(f"⚠️ [parse_initial] Non-200 status {status} for NEQ {neq} with proxy {proxy_ip}")
             if response.body:
-                self.logger.debug(f"Response body preview (first 500 chars): {response.body[:500]}")
+                try:
+                    body_preview = response.body[:500].decode('utf-8', errors='ignore')
+                    self.logger.debug(f"Response body preview: {body_preview}")
+                except:
+                    self.logger.debug(f"Response body (binary, first 500 bytes): {response.body[:500]}")
 
         form_selector = response.xpath('//form[@id="mainForm"]')
         if not form_selector:
@@ -192,6 +216,8 @@ class CtqScraperSpider(scrapy.Spider):
         
         self.logger.debug(f"Using User-Agent: {headers.get('User-Agent', 'default')[:50]}...")
 
+        proxy_ip = req_meta.get("proxy", "none").split("://")[1].split(":")[0] if req_meta.get("proxy", "none") != "none" and "://" in req_meta.get("proxy", "") else "none"
+        self.logger.info(f"➡️ [REQUEST] Making POST to check_validity | NEQ={neq} | Proxy={proxy_ip}")
         self.logger.debug(f"Making POST request to {response.url} with status handling: {req_meta.get('handle_httpstatus_list')}")
         
         yield scrapy.FormRequest(
@@ -208,17 +234,34 @@ class CtqScraperSpider(scrapy.Spider):
     def check_validity(self, response):
         neq = response.meta["neq"]
         
-        # Enhanced debugging for response
+        # Enhanced debugging for response with prominent status code
         proxy_used = response.meta.get("proxy", "none")
-        self.logger.debug(f"Response received for NEQ {neq}: status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        status = response.status
+        body_size = len(response.body) if response.body else 0
         
-        if response.status != 200:
-            self.logger.warning(f"Non-200 status code {response.status} for NEQ {neq} with proxy {proxy_used}")
+        # Extract proxy IP for cleaner logging
+        proxy_ip = "none"
+        if proxy_used != "none" and proxy_used:
+            try:
+                proxy_ip = proxy_used.split("://")[1].split(":")[0] if "://" in proxy_used else proxy_used.split(":")[0]
+            except:
+                proxy_ip = proxy_used
+        
+        status_emoji = "✅" if status == 200 else "⚠️" if 400 <= status < 500 else "❌"
+        self.logger.info(f"{status_emoji} [check_validity] STATUS={status} | NEQ={neq} | Proxy={proxy_ip} | BodySize={body_size}")
+        self.logger.debug(f"Response received for NEQ {neq}: status={status}, proxy={proxy_used}, body_size={body_size}")
+        
+        if status != 200:
+            self.logger.warning(f"⚠️ [check_validity] Non-200 status {status} for NEQ {neq} with proxy {proxy_ip}")
             if response.body:
-                self.logger.debug(f"Response body preview (first 500 chars): {response.body[:500]}")
+                try:
+                    body_preview = response.body[:500].decode('utf-8', errors='ignore')
+                    self.logger.debug(f"Response body preview: {body_preview}")
+                except:
+                    self.logger.debug(f"Response body (binary, first 500 bytes): {response.body[:500]}")
         
-        if response.status == 401 or not response.body:
-            self.logger.warning(f"Request failed for NEQ {neq}: status={response.status}, body_empty={not response.body}, proxy={proxy_used}")
+        if status == 401 or not response.body:
+            self.logger.warning(f"❌ [check_validity] Request failed for NEQ {neq}: status={status}, body_empty={not response.body}, proxy={proxy_ip}")
             return
         
         view_state = response.xpath('//input[@name="javax.faces.ViewState"]/@value').get()
@@ -285,6 +328,8 @@ class CtqScraperSpider(scrapy.Spider):
                 
                 self.logger.debug(f"Using User-Agent: {headers.get('User-Agent', 'default')[:50]}...")
                 
+                proxy_ip = req_meta.get("proxy", "none").split("://")[1].split(":")[0] if req_meta.get("proxy", "none") != "none" and "://" in req_meta.get("proxy", "") else "none"
+                self.logger.info(f"➡️ [REQUEST] Making POST to parse_vrac_result | NEQ={neq} | Proxy={proxy_ip}")
                 self.logger.debug(f"Making VRAC POST request to {second_request_url} for NEQ {neq}")
                 
                 yield scrapy.FormRequest(
@@ -330,6 +375,8 @@ class CtqScraperSpider(scrapy.Spider):
                         self.logger.debug(f"Using proxy {proxy_url} without auth for CTQ request to {second_request_url}")
                     req_meta["proxy"] = proxy_url
                 
+                proxy_ip = req_meta.get("proxy", "none").split("://")[1].split(":")[0] if req_meta.get("proxy", "none") != "none" and "://" in req_meta.get("proxy", "") else "none"
+                self.logger.info(f"➡️ [REQUEST] Making POST to parse_ctq_result | NEQ={neq} | Proxy={proxy_ip}")
                 self.logger.debug(f"Making CTQ POST request to {second_request_url} for NEQ {neq}")
                 self.logger.debug(f"Using User-Agent: {headers.get('User-Agent', 'default')[:50]}...")
                 
@@ -387,12 +434,25 @@ class CtqScraperSpider(scrapy.Spider):
     def parse_ctq_result(self, response):
         neq = response.meta["neq"]
         
-        # Enhanced debugging for response
+        # Enhanced debugging for response with prominent status code
         proxy_used = response.meta.get("proxy", "none")
-        self.logger.debug(f"parse_ctq_result: NEQ {neq}, status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        status = response.status
+        body_size = len(response.body) if response.body else 0
         
-        if response.status != 200:
-            self.logger.warning(f"Non-200 status code {response.status} in parse_ctq_result for NEQ {neq} with proxy {proxy_used}")
+        # Extract proxy IP for cleaner logging
+        proxy_ip = "none"
+        if proxy_used != "none" and proxy_used:
+            try:
+                proxy_ip = proxy_used.split("://")[1].split(":")[0] if "://" in proxy_used else proxy_used.split(":")[0]
+            except:
+                proxy_ip = proxy_used
+        
+        status_emoji = "✅" if status == 200 else "⚠️" if 400 <= status < 500 else "❌"
+        self.logger.info(f"{status_emoji} [parse_ctq_result] STATUS={status} | NEQ={neq} | Proxy={proxy_ip} | BodySize={body_size}")
+        self.logger.debug(f"parse_ctq_result: NEQ {neq}, status={status}, proxy={proxy_used}, body_size={body_size}")
+        
+        if status != 200:
+            self.logger.warning(f"⚠️ [parse_ctq_result] Non-200 status {status} for NEQ {neq} with proxy {proxy_ip}")
 
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
@@ -497,12 +557,25 @@ class CtqScraperSpider(scrapy.Spider):
         ctq_action = response.meta["ctq_action"]
         ctq_formdata = response.meta["ctq_formdata"]
         
-        # Enhanced debugging for response
+        # Enhanced debugging for response with prominent status code
         proxy_used = response.meta.get("proxy", "none")
-        self.logger.debug(f"parse_vrac_result: NEQ {neq}, status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        status = response.status
+        body_size = len(response.body) if response.body else 0
         
-        if response.status != 200:
-            self.logger.warning(f"Non-200 status code {response.status} in parse_vrac_result for NEQ {neq} with proxy {proxy_used}")
+        # Extract proxy IP for cleaner logging
+        proxy_ip = "none"
+        if proxy_used != "none" and proxy_used:
+            try:
+                proxy_ip = proxy_used.split("://")[1].split(":")[0] if "://" in proxy_used else proxy_used.split(":")[0]
+            except:
+                proxy_ip = proxy_used
+        
+        status_emoji = "✅" if status == 200 else "⚠️" if 400 <= status < 500 else "❌"
+        self.logger.info(f"{status_emoji} [parse_vrac_result] STATUS={status} | NEQ={neq} | Proxy={proxy_ip} | BodySize={body_size}")
+        self.logger.debug(f"parse_vrac_result: NEQ {neq}, status={status}, proxy={proxy_used}, body_size={body_size}")
+        
+        if status != 200:
+            self.logger.warning(f"⚠️ [parse_vrac_result] Non-200 status {status} for NEQ {neq} with proxy {proxy_ip}")
         
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
@@ -547,6 +620,8 @@ class CtqScraperSpider(scrapy.Spider):
                     self.logger.debug(f"Using proxy {proxy_url} without auth for CTQ-with-VRAC request to {ctq_url}")
                 req_meta["proxy"] = proxy_url
             
+            proxy_ip = req_meta.get("proxy", "none").split("://")[1].split(":")[0] if req_meta.get("proxy", "none") != "none" and "://" in req_meta.get("proxy", "") else "none"
+            self.logger.info(f"➡️ [REQUEST] Making POST to parse_ctq_result_with_vrac | NEQ={neq} | Proxy={proxy_ip}")
             self.logger.debug(f"Making CTQ-with-VRAC POST request to {ctq_url} for NEQ {neq}")
             self.logger.debug(f"Using User-Agent: {headers.get('User-Agent', 'default')[:50]}...")
             
@@ -589,12 +664,25 @@ class CtqScraperSpider(scrapy.Spider):
         neq = response.meta["neq"]
         vrac_data = response.meta["vrac_data"]
         
-        # Enhanced debugging for response
+        # Enhanced debugging for response with prominent status code
         proxy_used = response.meta.get("proxy", "none")
-        self.logger.debug(f"parse_ctq_result_with_vrac: NEQ {neq}, status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        status = response.status
+        body_size = len(response.body) if response.body else 0
         
-        if response.status != 200:
-            self.logger.warning(f"Non-200 status code {response.status} in parse_ctq_result_with_vrac for NEQ {neq} with proxy {proxy_used}")
+        # Extract proxy IP for cleaner logging
+        proxy_ip = "none"
+        if proxy_used != "none" and proxy_used:
+            try:
+                proxy_ip = proxy_used.split("://")[1].split(":")[0] if "://" in proxy_used else proxy_used.split(":")[0]
+            except:
+                proxy_ip = proxy_used
+        
+        status_emoji = "✅" if status == 200 else "⚠️" if 400 <= status < 500 else "❌"
+        self.logger.info(f"{status_emoji} [parse_ctq_result_with_vrac] STATUS={status} | NEQ={neq} | Proxy={proxy_ip} | BodySize={body_size}")
+        self.logger.debug(f"parse_ctq_result_with_vrac: NEQ {neq}, status={status}, proxy={proxy_used}, body_size={body_size}")
+        
+        if status != 200:
+            self.logger.warning(f"⚠️ [parse_ctq_result_with_vrac] Non-200 status {status} for NEQ {neq} with proxy {proxy_ip}")
 
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
@@ -825,26 +913,45 @@ class CtqScraperSpider(scrapy.Spider):
         req = getattr(failure, "request", None)
         if not req:
             self.errors += 1
-            self.logger.error(f"Error handler called without request object. Failure type: {type(failure)}")
+            self.logger.error(f"❌ [handle_error] Error handler called without request object. Failure type: {type(failure)}")
             return
 
-        # Enhanced error logging
+        # Enhanced error logging with prominent status/proxy info
         neq = req.meta.get("neq", "unknown")
         proxy_used = req.meta.get("proxy", "none")
         url = req.url if req else "unknown"
+        
+        # Extract proxy IP for cleaner logging
+        proxy_ip = "none"
+        if proxy_used != "none" and proxy_used:
+            try:
+                proxy_ip = proxy_used.split("://")[1].split(":")[0] if "://" in proxy_used else proxy_used.split(":")[0]
+            except:
+                proxy_ip = proxy_used
         
         # Log the failure details
         failure_type = type(failure.value).__name__ if hasattr(failure, 'value') and failure.value else type(failure).__name__
         failure_msg = str(failure.value) if hasattr(failure, 'value') and failure.value else str(failure)
         
-        self.logger.error(f"Request failed for NEQ {neq} to {url}: {failure_type} - {failure_msg}")
-        self.logger.error(f"Proxy used: {proxy_used}")
+        # Get response status if available
+        response_status = "N/A"
+        if hasattr(failure, 'response') and failure.response:
+            response_status = failure.response.status
+        
+        self.logger.error(f"❌ [handle_error] NEQ={neq} | Proxy={proxy_ip} | Status={response_status} | Error={failure_type}: {failure_msg} | URL={url[:80]}...")
+        self.logger.debug(f"Request failed for NEQ {neq} to {url}: {failure_type} - {failure_msg}")
+        self.logger.debug(f"Proxy used: {proxy_used}")
         
         # Log response if available
         if hasattr(failure, 'response') and failure.response:
-            self.logger.error(f"Response status: {failure.response.status}, body_size: {len(failure.response.body) if failure.response.body else 0}")
+            body_size = len(failure.response.body) if failure.response.body else 0
+            self.logger.error(f"❌ [handle_error] Response details - Status: {failure.response.status}, BodySize: {body_size}")
             if failure.response.body:
-                self.logger.debug(f"Response body preview (first 500 chars): {failure.response.body[:500]}")
+                try:
+                    body_preview = failure.response.body[:500].decode('utf-8', errors='ignore')
+                    self.logger.debug(f"Response body preview: {body_preview}")
+                except:
+                    self.logger.debug(f"Response body (binary, first 500 bytes): {failure.response.body[:500]}")
 
         if self.proxy_list:
             proxy = self._next_proxy()
