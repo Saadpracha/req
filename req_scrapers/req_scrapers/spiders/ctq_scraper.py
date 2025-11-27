@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 from datetime import datetime
 from pathlib import Path
 import json
+import random
 
 
 class CtqScraperSpider(scrapy.Spider):
@@ -31,6 +32,29 @@ class CtqScraperSpider(scrapy.Spider):
     current_proxy_index = 0
     total_requests = 0
     errors = 0
+    
+    # User agents for rotation
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+    ]
+    
+    # Accept-Language variations
+    accept_languages = [
+        "en-US,en;q=0.9",
+        "en-US,en;q=0.9,fr;q=0.8",
+        "en-CA,en;q=0.9,fr;q=0.8",
+        "fr-CA,fr;q=0.9,en;q=0.8",
+        "en-US,en;q=0.9,fr-CA;q=0.8",
+    ]
 
     def __init__(self, neqs=None, file=None, start_neq=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -142,11 +166,8 @@ class CtqScraperSpider(scrapy.Spider):
             "javax.faces.ViewState": view_state,
         }
 
-        headers = {
-            "Origin": "https://www.pes.ctq.gouv.qc.ca",
-            "Referer": response.url,
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
+        headers = self._get_random_headers(referer=response.url, include_user_agent=True)
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
         
         req_meta = {
             "neq": neq,
@@ -168,6 +189,8 @@ class CtqScraperSpider(scrapy.Spider):
             self.logger.debug(f"Proxy URL set in meta: {req_meta.get('proxy')}")
         else:
             self.logger.debug(f"Making request without proxy for {response.url}")
+        
+        self.logger.debug(f"Using User-Agent: {headers.get('User-Agent', 'default')[:50]}...")
 
         self.logger.debug(f"Making POST request to {response.url} with status handling: {req_meta.get('handle_httpstatus_list')}")
         
@@ -235,11 +258,8 @@ class CtqScraperSpider(scrapy.Spider):
                 else:
                     second_request_url = re.sub(r'execution=[^&;]*', f'execution={redirect_execution}', second_request_url)
                 
-                headers = {
-                    "Origin": "https://www.pes.ctq.gouv.qc.ca",
-                    "Referer": response.url,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                }
+                headers = self._get_random_headers(referer=response.url, include_user_agent=True)
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
                 
                 req_meta = {
                     "neq": neq,
@@ -263,6 +283,8 @@ class CtqScraperSpider(scrapy.Spider):
                         self.logger.debug(f"Using proxy {proxy_url} without auth for VRAC request to {second_request_url}")
                     req_meta["proxy"] = proxy_url
                 
+                self.logger.debug(f"Using User-Agent: {headers.get('User-Agent', 'default')[:50]}...")
+                
                 self.logger.debug(f"Making VRAC POST request to {second_request_url} for NEQ {neq}")
                 
                 yield scrapy.FormRequest(
@@ -285,11 +307,8 @@ class CtqScraperSpider(scrapy.Spider):
                 else:
                     second_request_url = re.sub(r'execution=[^&;]*', f'execution={redirect_execution}', second_request_url)
                 
-                headers = {
-                    "Origin": "https://www.pes.ctq.gouv.qc.ca",
-                    "Referer": response.url,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                }
+                headers = self._get_random_headers(referer=response.url, include_user_agent=True)
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
                 
                 req_meta = {
                     "neq": neq,
@@ -312,6 +331,7 @@ class CtqScraperSpider(scrapy.Spider):
                     req_meta["proxy"] = proxy_url
                 
                 self.logger.debug(f"Making CTQ POST request to {second_request_url} for NEQ {neq}")
+                self.logger.debug(f"Using User-Agent: {headers.get('User-Agent', 'default')[:50]}...")
                 
                 yield scrapy.FormRequest(
                     url=second_request_url,
@@ -504,11 +524,8 @@ class CtqScraperSpider(scrapy.Spider):
         if ctq_action:
             ctq_url = urljoin("https://www.pes.ctq.gouv.qc.ca", ctq_action)
             
-            headers = {
-                "Origin": "https://www.pes.ctq.gouv.qc.ca",
-                "Referer": response.url,
-                "Content-Type": "application/x-www-form-urlencoded",
-            }
+            headers = self._get_random_headers(referer=response.url, include_user_agent=True)
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
             
             req_meta = {
                 "neq": neq,
@@ -531,6 +548,7 @@ class CtqScraperSpider(scrapy.Spider):
                 req_meta["proxy"] = proxy_url
             
             self.logger.debug(f"Making CTQ-with-VRAC POST request to {ctq_url} for NEQ {neq}")
+            self.logger.debug(f"Using User-Agent: {headers.get('User-Agent', 'default')[:50]}...")
             
             yield scrapy.FormRequest(
                 url=ctq_url,
@@ -718,6 +736,32 @@ class CtqScraperSpider(scrapy.Spider):
         result = self.get_proxy_creds(self.current_proxy_index)
         self.logger.debug(f"_next_proxy: Returning proxy - ip:port={result['ip']}, has_auth={bool(result['user'] and result['pass'])}")
         return result
+    
+    def _get_random_headers(self, referer=None, include_user_agent=True):
+        """Generate random headers with rotating user agent and accept-language"""
+        user_agent = random.choice(self.user_agents) if include_user_agent else None
+        accept_language = random.choice(self.accept_languages)
+        
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": accept_language,
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin" if referer else "none",
+            "Cache-Control": "max-age=0",
+        }
+        
+        if include_user_agent and user_agent:
+            headers["User-Agent"] = user_agent
+        
+        if referer:
+            headers["Referer"] = referer
+            headers["Origin"] = "https://www.pes.ctq.gouv.qc.ca"
+        
+        return headers
 
     @staticmethod
     def _format_excel_text(value: str):
@@ -727,21 +771,8 @@ class CtqScraperSpider(scrapy.Spider):
         return f"{value}"
 
     def make_request(self, url, callback, meta=None, method="GET", formdata=None):
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
-            "Cache-Control": "max-age=0",
-        }
-        
-        if meta and meta.get("referer"):
-            headers["Referer"] = meta.get("referer")
+        referer = meta.get("referer") if meta else None
+        headers = self._get_random_headers(referer=referer, include_user_agent=True)
 
         req_meta = {
             **(meta or {}),
