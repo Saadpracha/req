@@ -88,19 +88,35 @@ class ReqScrapersDownloaderMiddleware:
     def process_response(self, request, response, spider):
         # Called with the response returned from the downloader.
 
-        # Enhanced debugging: Log response details
+        # Enhanced debugging: Log response details with prominent status code
         proxy = request.meta.get("proxy", "none")
         neq = request.meta.get("neq", "unknown")
         url = request.url
         status = response.status
         body_size = len(response.body) if response.body else 0
         
-        spider.logger.debug(f"[MIDDLEWARE] process_response: NEQ={neq}, URL={url}, Status={status}, Proxy={proxy}, BodySize={body_size}")
+        # Extract proxy IP for cleaner logging
+        proxy_ip = "none"
+        if proxy != "none" and proxy:
+            try:
+                # Extract IP from proxy URL (e.g., "http://104.164.79.84:12323" -> "104.164.79.84")
+                proxy_ip = proxy.split("://")[1].split(":")[0] if "://" in proxy else proxy.split(":")[0]
+            except:
+                proxy_ip = proxy
+        
+        # Log with prominent status code
+        status_emoji = "✅" if status == 200 else "⚠️" if 400 <= status < 500 else "❌"
+        spider.logger.info(f"{status_emoji} [STATUS {status}] NEQ={neq} | Proxy={proxy_ip} | URL={url[:80]}... | BodySize={body_size}")
+        spider.logger.debug(f"[MIDDLEWARE] Full details - NEQ={neq}, Status={status}, Proxy={proxy}, URL={url}, BodySize={body_size}")
         
         if status != 200:
-            spider.logger.warning(f"[MIDDLEWARE] Non-200 response: NEQ={neq}, Status={status}, Proxy={proxy}, URL={url}")
+            spider.logger.warning(f"⚠️ [NON-200 STATUS {status}] NEQ={neq} | Proxy={proxy_ip} | URL={url}")
             if response.body:
-                spider.logger.debug(f"[MIDDLEWARE] Response body preview (first 500 chars): {response.body[:500].decode('utf-8', errors='ignore')}")
+                try:
+                    body_preview = response.body[:500].decode('utf-8', errors='ignore')
+                    spider.logger.debug(f"[MIDDLEWARE] Response body preview: {body_preview}")
+                except:
+                    spider.logger.debug(f"[MIDDLEWARE] Response body (binary, first 500 bytes): {response.body[:500]}")
 
         # Must either;
         # - return a Response object
@@ -112,14 +128,23 @@ class ReqScrapersDownloaderMiddleware:
         # Called when a download handler or a process_request()
         # (from other downloader middleware) raises an exception.
 
-        # Enhanced debugging: Log exception details
+        # Enhanced debugging: Log exception details with proxy info
         proxy = request.meta.get("proxy", "none")
         neq = request.meta.get("neq", "unknown")
         url = request.url
         exception_type = type(exception).__name__
         exception_msg = str(exception)
         
-        spider.logger.error(f"[MIDDLEWARE] process_exception: NEQ={neq}, URL={url}, Proxy={proxy}, Exception={exception_type}: {exception_msg}")
+        # Extract proxy IP for cleaner logging
+        proxy_ip = "none"
+        if proxy != "none" and proxy:
+            try:
+                proxy_ip = proxy.split("://")[1].split(":")[0] if "://" in proxy else proxy.split(":")[0]
+            except:
+                proxy_ip = proxy
+        
+        spider.logger.error(f"❌ [EXCEPTION] NEQ={neq} | Proxy={proxy_ip} | Exception={exception_type}: {exception_msg} | URL={url[:80]}...")
+        spider.logger.debug(f"[MIDDLEWARE] Full exception details - NEQ={neq}, URL={url}, Proxy={proxy}, Exception={exception_type}: {exception_msg}")
 
         # Must either:
         # - return None: continue processing this exception
