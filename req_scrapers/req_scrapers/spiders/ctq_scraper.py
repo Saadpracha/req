@@ -96,6 +96,7 @@ class CtqScraperSpider(scrapy.Spider):
 
     def start_requests(self):
         for neq in self.neqs:
+            self.logger.debug(f"Starting request for NEQ {neq} to {self.start_urls[0]}")
             yield from self.make_request(
                 url=self.start_urls[0],
                 callback=self.parse_initial,
@@ -104,9 +105,19 @@ class CtqScraperSpider(scrapy.Spider):
 
     def parse_initial(self, response):
         neq = response.meta["neq"]
+        
+        # Enhanced debugging for initial response
+        proxy_used = response.meta.get("proxy", "none")
+        self.logger.debug(f"parse_initial: NEQ {neq}, status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        
+        if response.status != 200:
+            self.logger.warning(f"Non-200 status code {response.status} in parse_initial for NEQ {neq} with proxy {proxy_used}")
+            if response.body:
+                self.logger.debug(f"Response body preview (first 500 chars): {response.body[:500]}")
 
         form_selector = response.xpath('//form[@id="mainForm"]')
         if not form_selector:
+            self.logger.warning(f"Form not found in parse_initial for NEQ {neq} with proxy {proxy_used}")
             return
 
         view_state = response.xpath('//input[@name="javax.faces.ViewState"]/@value').get()
@@ -146,17 +157,27 @@ class CtqScraperSpider(scrapy.Spider):
         
         if self.proxy_list:
             proxy = self._next_proxy()
+            proxy_url = f"http://{proxy['ip']}"
             if proxy["user"] and proxy["pass"]:
                 creds = f"{proxy['user']}:{proxy['pass']}"
                 headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
-            req_meta["proxy"] = f"http://{proxy['ip']}"
+                self.logger.debug(f"Using proxy {proxy_url} with auth (user: {proxy['user']}) for {response.url}")
+            else:
+                self.logger.debug(f"Using proxy {proxy_url} without auth for {response.url}")
+            req_meta["proxy"] = proxy_url
+            self.logger.debug(f"Proxy URL set in meta: {req_meta.get('proxy')}")
+        else:
+            self.logger.debug(f"Making request without proxy for {response.url}")
 
+        self.logger.debug(f"Making POST request to {response.url} with status handling: {req_meta.get('handle_httpstatus_list')}")
+        
         yield scrapy.FormRequest(
             url=response.url,
             formdata=first_request_payload,
             headers=headers,
             method="POST",
             callback=self.check_validity,
+            errback=self.handle_error,
             meta=req_meta,
             dont_filter=True,
         )
@@ -164,7 +185,17 @@ class CtqScraperSpider(scrapy.Spider):
     def check_validity(self, response):
         neq = response.meta["neq"]
         
+        # Enhanced debugging for response
+        proxy_used = response.meta.get("proxy", "none")
+        self.logger.debug(f"Response received for NEQ {neq}: status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        
+        if response.status != 200:
+            self.logger.warning(f"Non-200 status code {response.status} for NEQ {neq} with proxy {proxy_used}")
+            if response.body:
+                self.logger.debug(f"Response body preview (first 500 chars): {response.body[:500]}")
+        
         if response.status == 401 or not response.body:
+            self.logger.warning(f"Request failed for NEQ {neq}: status={response.status}, body_empty={not response.body}, proxy={proxy_used}")
             return
         
         view_state = response.xpath('//input[@name="javax.faces.ViewState"]/@value').get()
@@ -223,10 +254,16 @@ class CtqScraperSpider(scrapy.Spider):
                 
                 if self.proxy_list:
                     proxy = self._next_proxy()
+                    proxy_url = f"http://{proxy['ip']}"
                     if proxy["user"] and proxy["pass"]:
                         creds = f"{proxy['user']}:{proxy['pass']}"
                         headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
-                    req_meta["proxy"] = f"http://{proxy['ip']}"
+                        self.logger.debug(f"Using proxy {proxy_url} with auth for VRAC request to {second_request_url}")
+                    else:
+                        self.logger.debug(f"Using proxy {proxy_url} without auth for VRAC request to {second_request_url}")
+                    req_meta["proxy"] = proxy_url
+                
+                self.logger.debug(f"Making VRAC POST request to {second_request_url} for NEQ {neq}")
                 
                 yield scrapy.FormRequest(
                     url=second_request_url,
@@ -234,6 +271,7 @@ class CtqScraperSpider(scrapy.Spider):
                     headers=headers,
                     method="POST",
                     callback=self.parse_vrac_result,
+                    errback=self.handle_error,
                     meta=req_meta,
                     dont_filter=True,
                 )
@@ -264,10 +302,16 @@ class CtqScraperSpider(scrapy.Spider):
                 
                 if self.proxy_list:
                     proxy = self._next_proxy()
+                    proxy_url = f"http://{proxy['ip']}"
                     if proxy["user"] and proxy["pass"]:
                         creds = f"{proxy['user']}:{proxy['pass']}"
                         headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
-                    req_meta["proxy"] = f"http://{proxy['ip']}"
+                        self.logger.debug(f"Using proxy {proxy_url} with auth for CTQ request to {second_request_url}")
+                    else:
+                        self.logger.debug(f"Using proxy {proxy_url} without auth for CTQ request to {second_request_url}")
+                    req_meta["proxy"] = proxy_url
+                
+                self.logger.debug(f"Making CTQ POST request to {second_request_url} for NEQ {neq}")
                 
                 yield scrapy.FormRequest(
                     url=second_request_url,
@@ -275,6 +319,7 @@ class CtqScraperSpider(scrapy.Spider):
                     headers=headers,
                     method="POST",
                     callback=self.parse_ctq_result,
+                    errback=self.handle_error,
                     meta=req_meta,
                     dont_filter=True,
                 )
@@ -321,6 +366,13 @@ class CtqScraperSpider(scrapy.Spider):
 
     def parse_ctq_result(self, response):
         neq = response.meta["neq"]
+        
+        # Enhanced debugging for response
+        proxy_used = response.meta.get("proxy", "none")
+        self.logger.debug(f"parse_ctq_result: NEQ {neq}, status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        
+        if response.status != 200:
+            self.logger.warning(f"Non-200 status code {response.status} in parse_ctq_result for NEQ {neq} with proxy {proxy_used}")
 
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
@@ -425,6 +477,13 @@ class CtqScraperSpider(scrapy.Spider):
         ctq_action = response.meta["ctq_action"]
         ctq_formdata = response.meta["ctq_formdata"]
         
+        # Enhanced debugging for response
+        proxy_used = response.meta.get("proxy", "none")
+        self.logger.debug(f"parse_vrac_result: NEQ {neq}, status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        
+        if response.status != 200:
+            self.logger.warning(f"Non-200 status code {response.status} in parse_vrac_result for NEQ {neq} with proxy {proxy_used}")
+        
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
         
@@ -462,10 +521,16 @@ class CtqScraperSpider(scrapy.Spider):
             
             if self.proxy_list:
                 proxy = self._next_proxy()
+                proxy_url = f"http://{proxy['ip']}"
                 if proxy["user"] and proxy["pass"]:
                     creds = f"{proxy['user']}:{proxy['pass']}"
                     headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
-                req_meta["proxy"] = f"http://{proxy['ip']}"
+                    self.logger.debug(f"Using proxy {proxy_url} with auth for CTQ-with-VRAC request to {ctq_url}")
+                else:
+                    self.logger.debug(f"Using proxy {proxy_url} without auth for CTQ-with-VRAC request to {ctq_url}")
+                req_meta["proxy"] = proxy_url
+            
+            self.logger.debug(f"Making CTQ-with-VRAC POST request to {ctq_url} for NEQ {neq}")
             
             yield scrapy.FormRequest(
                 url=ctq_url,
@@ -473,6 +538,7 @@ class CtqScraperSpider(scrapy.Spider):
                 headers=headers,
                 method="POST",
                 callback=self.parse_ctq_result_with_vrac,
+                errback=self.handle_error,
                 meta=req_meta,
                 dont_filter=True,
             )
@@ -504,6 +570,13 @@ class CtqScraperSpider(scrapy.Spider):
     def parse_ctq_result_with_vrac(self, response):
         neq = response.meta["neq"]
         vrac_data = response.meta["vrac_data"]
+        
+        # Enhanced debugging for response
+        proxy_used = response.meta.get("proxy", "none")
+        self.logger.debug(f"parse_ctq_result_with_vrac: NEQ {neq}, status={response.status}, proxy={proxy_used}, body_size={len(response.body) if response.body else 0}")
+        
+        if response.status != 200:
+            self.logger.warning(f"Non-200 status code {response.status} in parse_ctq_result_with_vrac for NEQ {neq} with proxy {proxy_used}")
 
         def extract_text(xpath):
             return response.xpath(xpath).get(default="").strip()
@@ -608,17 +681,26 @@ class CtqScraperSpider(scrapy.Spider):
             return {"ip": "", "user": "", "pass": ""}
 
         entry = self.proxy_list[index % len(self.proxy_list)]
+        self.logger.debug(f"get_proxy_creds: Raw entry from list: {entry}")
         parts = entry.split(":")
+        self.logger.debug(f"get_proxy_creds: Split parts: {parts}, count: {len(parts)}")
         if len(parts) == 4:
             ip, port, user, password = parts
-            return {"ip": f"{ip}:{port}", "user": user, "pass": password}
-        return {"ip": entry, "user": "", "pass": ""}
+            result = {"ip": f"{ip}:{port}", "user": user, "pass": password}
+            self.logger.debug(f"get_proxy_creds: Parsed proxy - ip:port={result['ip']}, user={result['user']}")
+            return result
+        result = {"ip": entry, "user": "", "pass": ""}
+        self.logger.debug(f"get_proxy_creds: Using entry as-is (no auth): {result['ip']}")
+        return result
 
     def _next_proxy(self):
         if not self.proxy_list:
             return {"ip": "", "user": "", "pass": ""}
         self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
-        return self.get_proxy_creds(self.current_proxy_index)
+        self.logger.debug(f"_next_proxy: Rotating to index {self.current_proxy_index} (total proxies: {len(self.proxy_list)})")
+        result = self.get_proxy_creds(self.current_proxy_index)
+        self.logger.debug(f"_next_proxy: Returning proxy - ip:port={result['ip']}, has_auth={bool(result['user'] and result['pass'])}")
+        return result
 
     @staticmethod
     def _format_excel_text(value: str):
@@ -652,16 +734,21 @@ class CtqScraperSpider(scrapy.Spider):
 
         if self.proxy_list:
             proxy = self._next_proxy()
+            proxy_url = f"http://{proxy['ip']}"
             if proxy["user"] and proxy["pass"]:
                 creds = f"{proxy['user']}:{proxy['pass']}"
                 headers["Proxy-Authorization"] = "Basic " + base64.b64encode(creds.encode()).decode()
+                self.logger.debug(f"Using proxy {proxy_url} with auth (user: {proxy['user']}) for {url}")
             else:
                 try:
                     del headers["Proxy-Authorization"]
                 except Exception:
                     pass
-            req_meta["proxy"] = f"http://{proxy['ip']}"
-            self.logger.debug(f"Using proxy {req_meta['proxy']} for {url}")
+                self.logger.debug(f"Using proxy {proxy_url} without auth for {url}")
+            req_meta["proxy"] = proxy_url
+            self.logger.debug(f"Proxy URL set in meta: {req_meta.get('proxy')}")
+        else:
+            self.logger.debug(f"Making request without proxy for {url}")
 
         self.total_requests += 1
         
@@ -690,12 +777,34 @@ class CtqScraperSpider(scrapy.Spider):
         req = getattr(failure, "request", None)
         if not req:
             self.errors += 1
+            self.logger.error(f"Error handler called without request object. Failure type: {type(failure)}")
             return
+
+        # Enhanced error logging
+        neq = req.meta.get("neq", "unknown")
+        proxy_used = req.meta.get("proxy", "none")
+        url = req.url if req else "unknown"
+        
+        # Log the failure details
+        failure_type = type(failure.value).__name__ if hasattr(failure, 'value') and failure.value else type(failure).__name__
+        failure_msg = str(failure.value) if hasattr(failure, 'value') and failure.value else str(failure)
+        
+        self.logger.error(f"Request failed for NEQ {neq} to {url}: {failure_type} - {failure_msg}")
+        self.logger.error(f"Proxy used: {proxy_used}")
+        
+        # Log response if available
+        if hasattr(failure, 'response') and failure.response:
+            self.logger.error(f"Response status: {failure.response.status}, body_size: {len(failure.response.body) if failure.response.body else 0}")
+            if failure.response.body:
+                self.logger.debug(f"Response body preview (first 500 chars): {failure.response.body[:500]}")
 
         if self.proxy_list:
             proxy = self._next_proxy()
+            proxy_url = f"http://{proxy['ip']}"
             new_meta = dict(req.meta)
-            new_meta["proxy"] = f"http://{proxy['ip']}"
+            new_meta["proxy"] = proxy_url
+            
+            self.logger.debug(f"Retrying with new proxy {proxy_url} for NEQ {neq}")
 
             if proxy["user"] and proxy["pass"]:
                 creds = f"{proxy['user']}:{proxy['pass']}"
@@ -710,3 +819,4 @@ class CtqScraperSpider(scrapy.Spider):
             yield req.replace(meta=new_meta, dont_filter=True)
         else:
             self.errors += 1
+            self.logger.error(f"No proxies available for retry. Marking as error for NEQ {neq}")

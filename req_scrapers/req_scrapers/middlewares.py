@@ -69,6 +69,14 @@ class ReqScrapersDownloaderMiddleware:
         # Called for each request that goes through the downloader
         # middleware.
 
+        # Enhanced debugging: Log proxy and request details
+        proxy = request.meta.get("proxy", "none")
+        neq = request.meta.get("neq", "unknown")
+        url = request.url
+        
+        spider.logger.debug(f"[MIDDLEWARE] process_request: NEQ={neq}, URL={url}, Proxy={proxy}")
+        spider.logger.debug(f"[MIDDLEWARE] Request headers: {dict(request.headers)}")
+        
         # Must either:
         # - return None: continue processing this request
         # - or return a Response object
@@ -80,6 +88,20 @@ class ReqScrapersDownloaderMiddleware:
     def process_response(self, request, response, spider):
         # Called with the response returned from the downloader.
 
+        # Enhanced debugging: Log response details
+        proxy = request.meta.get("proxy", "none")
+        neq = request.meta.get("neq", "unknown")
+        url = request.url
+        status = response.status
+        body_size = len(response.body) if response.body else 0
+        
+        spider.logger.debug(f"[MIDDLEWARE] process_response: NEQ={neq}, URL={url}, Status={status}, Proxy={proxy}, BodySize={body_size}")
+        
+        if status != 200:
+            spider.logger.warning(f"[MIDDLEWARE] Non-200 response: NEQ={neq}, Status={status}, Proxy={proxy}, URL={url}")
+            if response.body:
+                spider.logger.debug(f"[MIDDLEWARE] Response body preview (first 500 chars): {response.body[:500].decode('utf-8', errors='ignore')}")
+
         # Must either;
         # - return a Response object
         # - return a Request object
@@ -89,6 +111,15 @@ class ReqScrapersDownloaderMiddleware:
     def process_exception(self, request, exception, spider):
         # Called when a download handler or a process_request()
         # (from other downloader middleware) raises an exception.
+
+        # Enhanced debugging: Log exception details
+        proxy = request.meta.get("proxy", "none")
+        neq = request.meta.get("neq", "unknown")
+        url = request.url
+        exception_type = type(exception).__name__
+        exception_msg = str(exception)
+        
+        spider.logger.error(f"[MIDDLEWARE] process_exception: NEQ={neq}, URL={url}, Proxy={proxy}, Exception={exception_type}: {exception_msg}")
 
         # Must either:
         # - return None: continue processing this exception
