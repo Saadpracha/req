@@ -88,24 +88,32 @@ class CtqScraperSpider(scrapy.Spider):
                             self.logger.info(f"{'='*80}")
                             self.logger.info(f"PROXY CONFIGURATION: Loaded {len(self.proxy_list)} proxies from {proxies_path}")
                             # Log all proxies (masking passwords for security)
+                            # Test parsing to verify format
                             for i, proxy_entry in enumerate(self.proxy_list):
-                                parts = proxy_entry.split(":")
+                                # Try both formats for logging
+                                if "," in proxy_entry:
+                                    parts = proxy_entry.split(",")
+                                    format_type = "comma-separated"
+                                else:
+                                    parts = proxy_entry.split(":")
+                                    format_type = "colon-separated"
+                                
                                 if len(parts) >= 4:
-                                    # Format: IP:PORT:USER:PASS
+                                    # Format: IP:PORT:USER:PASS or IP,PORT,USER,PASS
                                     ip_port = f"{parts[0]}:{parts[1]}"
                                     user = parts[2]
-                                    msg = f"  Proxy #{i+1}: {ip_port} (user: {user}, password: ***)"
+                                    msg = f"  Proxy #{i+1}: {ip_port} (user: {user}, password: ***) [{format_type}]"
                                     print(msg, flush=True)
                                     self.logger.info(msg)
                                 elif len(parts) >= 2:
-                                    # Format: IP:PORT
-                                    msg = f"  Proxy #{i+1}: {parts[0]}:{parts[1]} (no auth)"
+                                    # Format: IP:PORT or IP,PORT
+                                    msg = f"  Proxy #{i+1}: {parts[0]}:{parts[1]} (no auth) [{format_type}]"
                                     print(msg, flush=True)
                                     self.logger.info(msg)
                                 else:
-                                    msg = f"  Proxy #{i+1}: {proxy_entry}"
+                                    msg = f"  Proxy #{i+1}: {proxy_entry} [UNPARSED - may cause issues]"
                                     print(msg, flush=True)
-                                    self.logger.info(msg)
+                                    self.logger.warning(msg)
                             msg = f"Proxy rotation will cycle through all {len(self.proxy_list)} proxies"
                             print(msg, flush=True)
                             print(f"{'='*80}", flush=True)
@@ -819,11 +827,19 @@ class CtqScraperSpider(scrapy.Spider):
     def _next_proxy(self):
         if not self.proxy_list:
             return {"ip": "", "user": "", "pass": ""}
+        # Increment index and get proxy
         self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
         self.logger.debug(f"_next_proxy: Rotating to index {self.current_proxy_index} (total proxies: {len(self.proxy_list)})")
         result = self.get_proxy_creds(self.current_proxy_index)
         self.logger.debug(f"_next_proxy: Returning proxy - ip:port={result['ip']}, has_auth={bool(result['user'] and result['pass'])}")
         return result
+    
+    def _get_current_proxy(self):
+        """Get current proxy without incrementing (for preview/logging)"""
+        if not self.proxy_list:
+            return {"ip": "", "user": "", "pass": ""}
+        next_index = (self.current_proxy_index + 1) % len(self.proxy_list)
+        return self.get_proxy_creds(next_index)
     
     def _get_random_headers(self, referer=None, include_user_agent=True):
         """Generate random headers with rotating user agent and accept-language"""
