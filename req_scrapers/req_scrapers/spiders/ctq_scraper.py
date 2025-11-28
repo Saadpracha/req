@@ -822,25 +822,50 @@ class CtqScraperSpider(scrapy.Spider):
             return {"ip": "", "user": "", "pass": ""}
 
         entry = self.proxy_list[index % len(self.proxy_list)]
+        entry = entry.strip()  # Clean whitespace
         self.logger.debug(f"get_proxy_creds: Raw entry from list: {entry}")
         
-        # Try colon separator first (format: IP:PORT:USER:PASS)
-        parts = entry.split(":")
-        self.logger.debug(f"get_proxy_creds: Split by colon - parts: {parts}, count: {len(parts)}")
+        # Determine which separator to use by checking the format
+        # Count separators to determine the format
+        colon_count = entry.count(":")
+        comma_count = entry.count(",")
         
-        # If colon split didn't work, try comma separator (format: IP,PORT,USER,PASS)
-        if len(parts) != 4:
-            parts = entry.split(",")
-            self.logger.debug(f"get_proxy_creds: Split by comma - parts: {parts}, count: {len(parts)}")
+        parts = None
+        separator_used = None
         
-        if len(parts) == 4:
+        # If entry has commas and 3 commas (4 parts), it's comma-separated
+        if comma_count == 3:
+            parts = [p.strip() for p in entry.split(",")]
+            separator_used = "comma"
+            self.logger.debug(f"get_proxy_creds: Detected comma-separated format - parts: {parts}, count: {len(parts)}")
+        # If entry has colons and 3 colons (4 parts), it's colon-separated
+        elif colon_count == 3:
+            parts = [p.strip() for p in entry.split(":")]
+            separator_used = "colon"
+            self.logger.debug(f"get_proxy_creds: Detected colon-separated format - parts: {parts}, count: {len(parts)}")
+        # Fallback: try colon first, then comma
+        else:
+            # Try colon separator first (format: IP:PORT:USER:PASS)
+            parts = [p.strip() for p in entry.split(":")]
+            if len(parts) == 4:
+                separator_used = "colon"
+                self.logger.debug(f"get_proxy_creds: Split by colon - parts: {parts}, count: {len(parts)}")
+            else:
+                # Try comma separator (format: IP,PORT,USER,PASS)
+                parts = [p.strip() for p in entry.split(",")]
+                if len(parts) == 4:
+                    separator_used = "comma"
+                    self.logger.debug(f"get_proxy_creds: Split by comma - parts: {parts}, count: {len(parts)}")
+        
+        # Parse 4-part format (IP:PORT:USER:PASS or IP,PORT,USER,PASS)
+        if parts and len(parts) == 4:
             ip, port, user, password = parts
             result = {"ip": f"{ip}:{port}", "user": user, "pass": password}
-            self.logger.debug(f"get_proxy_creds: Parsed proxy - ip:port={result['ip']}, user={result['user']}")
+            self.logger.debug(f"get_proxy_creds: Parsed proxy - ip:port={result['ip']}, user={result['user']}, format={separator_used}")
             return result
         
         # Fallback: try to parse as IP:PORT (no auth) with either separator
-        if len(parts) == 2:
+        if parts and len(parts) == 2:
             ip, port = parts
             result = {"ip": f"{ip}:{port}", "user": "", "pass": ""}
             self.logger.debug(f"get_proxy_creds: Parsed as IP:PORT (no auth) - {result['ip']}")
@@ -848,7 +873,7 @@ class CtqScraperSpider(scrapy.Spider):
         
         # Last resort: use entry as-is
         result = {"ip": entry, "user": "", "pass": ""}
-        self.logger.warning(f"get_proxy_creds: Could not parse proxy entry, using as-is: {result['ip']}")
+        self.logger.warning(f"get_proxy_creds: Could not parse proxy entry (colons={colon_count}, commas={comma_count}), using as-is: {result['ip']}")
         return result
 
     def _next_proxy(self):
