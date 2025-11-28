@@ -64,17 +64,23 @@ class CtqScraperSpider(scrapy.Spider):
         print("\n" + "="*80, flush=True)
         print("DEBUGGING MODE ENABLED - Full request/response logging active", flush=True)
         print("="*80 + "\n", flush=True)
-        self.neqs = neqs.split(",") if neqs else []
-        if file:
-            self.neqs.extend(self._load_neqs_from_file(file))
-        self.neqs = list(dict.fromkeys([str(n).strip() for n in self.neqs if str(n).strip()]))
+        inline_neqs = [str(n).strip() for n in neqs.split(",")] if neqs else []
+        inline_neqs = [n for n in inline_neqs if n]
 
-        if start_neq and start_neq in self.neqs:
-            start_index = self.neqs.index(start_neq)
-            self.neqs = self.neqs[start_index:]
-            self.logger.info(f"Resuming from NEQ {start_neq} (index {start_index})")
-        elif start_neq:
-            self.logger.warning(f"Start NEQ {start_neq} not found. Starting from beginning.")
+        start_neq_clean = str(start_neq).strip() if start_neq else None
+        start_exists = False
+        if start_neq_clean:
+            if start_neq_clean in inline_neqs:
+                start_exists = True
+            elif file and self._value_exists_in_file(file, start_neq_clean):
+                start_exists = True
+            if start_exists:
+                self.logger.info(f"Resuming from NEQ {start_neq_clean}")
+            else:
+                self.logger.warning(f"Start NEQ {start_neq_clean} not found. Starting from beginning.")
+                start_neq_clean = None
+
+        self.neqs = self._iter_neq_values(inline_neqs, file, start_neq_clean)
 
         # Load proxies from proxies.json at project root if present
         try:
@@ -757,18 +763,55 @@ class CtqScraperSpider(scrapy.Spider):
         self.logger.debug(f"Final combined item: {base_item}")
         yield base_item
 
+    def _iter_neq_values(self, inline_neqs, file_path, start_neq):
+        seen = set()
+        start_pending = start_neq
+
+        def iterate_sources():
+            for val in inline_neqs:
+                yield val
+            if file_path:
+                yield from self._load_neqs_from_file(file_path)
+
+        def generator():
+            nonlocal start_pending
+            for raw in iterate_sources():
+                val = str(raw).strip()
+                if not val or val in seen:
+                    continue
+                seen.add(val)
+                if start_pending:
+                    if val != start_pending:
+                        continue
+                    start_pending = None
+                yield val
+
+        return generator()
+
+    def _value_exists_in_file(self, file_path: str, target: str) -> bool:
+        try:
+            for value in self._load_neqs_from_file(file_path):
+                if value == target:
+                    return True
+        except Exception:
+            return False
+        return False
+
     def _load_neqs_from_file(self, file_path: str):
-        values = []
         try:
             with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    val = row.get("NEQ") or next((v for k, v in row.items() if k.lower().strip() == "neq"), None)
-                    if val and str(val).strip():
-                        values.append(str(val).strip())
-        except Exception:
-            pass
-        return values
+                    val = row.get("NEQ") or next(
+                        (v for k, v in row.items() if k and k.lower().strip() == "neq"),
+                        None,
+                    )
+                    if val:
+                        stripped = str(val).strip()
+                        if stripped:
+                            yield stripped
+        except Exception as exc:
+            self.logger.warning(f"Failed to load NEQs from {file_path}: {exc}")
 
     # ------------------------
     # Proxy helpers and request builder
