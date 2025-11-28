@@ -791,43 +791,73 @@ class CtqScraperSpider(scrapy.Spider):
         then values from file. Handles deduplication and start_neq resumption.
         Memory-efficient for large files as it processes values incrementally.
         Yields values lazily - only processes the next value when requested.
+        
+        This generator is truly lazy - it only reads from the file when the next
+        value is actually requested, not upfront.
         """
         seen = set()
         start_pending = start_neq
+        inline_index = 0
+        file_generator = None
 
-        def iterate_sources():
-            """Yield values from inline list first, then from file"""
-            # Process inline values first
-            for val in inline_neqs:
+        def get_next_value():
+            """Get the next NEQ value from either inline list or file"""
+            nonlocal inline_index, file_generator, start_pending
+            
+            # First, process inline values
+            while inline_index < len(inline_neqs):
+                val = str(inline_neqs[inline_index]).strip()
+                inline_index += 1
+                if val and val not in seen:
+                    seen.add(val)
+                    # Handle start_neq resumption
+                    if start_pending:
+                        if val != start_pending:
+                            continue
+                        start_pending = None
+                        self.logger.info(f"Resuming from NEQ {val}")
+                    return val
+            
+            # Then, process file values (lazily - only when needed)
+            if file_path and file_generator is None:
+                # Create file generator only when we actually need to read from file
+                # This ensures the file is not opened until the first file value is requested
+                self.logger.debug(f"Opening file {file_path} for lazy reading")
+                file_generator = self._load_neqs_from_file(file_path)
+            
+            if file_generator:
+                try:
+                    while True:
+                        val = next(file_generator)
+                        val = str(val).strip()
+                        if not val:
+                            continue
+                        if val in seen:
+                            continue
+                        seen.add(val)
+                        # Handle start_neq resumption
+                        if start_pending:
+                            if val != start_pending:
+                                continue
+                            start_pending = None
+                            self.logger.info(f"Resuming from NEQ {val}")
+                        return val
+                except StopIteration:
+                    file_generator = None
+            
+            # No more values
+            raise StopIteration
+
+        # Generator that yields values one at a time
+        # This only advances when next() is called on it
+        while True:
+            try:
+                val = get_next_value()
+                # Yield immediately - generator pauses here until next() is called again
                 yield val
-            # Then stream from file one row at a time
-            if file_path:
-                yield from self._load_neqs_from_file(file_path)
-
-        def generator():
-            nonlocal start_pending
-            # Process one value at a time - yield immediately when found
-            for raw in iterate_sources():
-                val = str(raw).strip()
-                if not val:
-                    continue
-                
-                # Deduplication: skip if we've seen this value
-                if val in seen:
-                    continue
-                seen.add(val)
-                
-                # Handle start_neq resumption: skip until we find the start value
-                if start_pending:
-                    if val != start_pending:
-                        continue
-                    start_pending = None
-                    self.logger.info(f"Resuming from NEQ {val}")
-                
-                # Yield immediately - don't wait for all values to be processed
-                yield val
-
-        return generator()
+            except StopIteration:
+                # No more values to process
+                break
 
     def _value_exists_in_file(self, file_path: str, target: str) -> bool:
         """
