@@ -141,18 +141,34 @@ class CtqScraperSpider(scrapy.Spider):
             self.logger.warning(f"Failed to load proxies.json: {e}")
 
     def start_requests(self):
+        """
+        Generate initial requests one at a time from the NEQ generator.
+        This processes each NEQ value lazily - only when Scrapy requests the next request.
+        This is memory-efficient for large files with hundreds of thousands of NEQs.
+        The generator only advances when Scrapy actually requests the next request,
+        preventing upfront processing of all values.
+        """
+        # Process one NEQ at a time - generator only advances when Scrapy requests next item
         for neq in self.neqs:
+            # Get proxy info for logging
             proxy_info = "none"
             if self.proxy_list:
                 # Preview which proxy will be used (next one in rotation)
                 proxy_preview = self._get_current_proxy()
                 proxy_info = proxy_preview["ip"].split(":")[0] if proxy_preview["ip"] else "none"
+            
             self.logger.debug(f"Starting initial GET | NEQ={neq} | Proxy={proxy_info}")
-            yield from self.make_request(
+            
+            # Get the request from make_request generator and yield it directly
+            # This ensures we only process one NEQ at a time
+            request_gen = self.make_request(
                 url=self.start_urls[0],
                 callback=self.parse_initial,
                 meta={"neq": neq, "cookiejar": f"jar-{neq}"},
             )
+            # Yield the request immediately - this allows Scrapy to process it
+            # before the generator advances to the next NEQ
+            yield next(request_gen)
 
     def parse_initial(self, response):
         neq = response.meta["neq"]
@@ -774,20 +790,23 @@ class CtqScraperSpider(scrapy.Spider):
         Generator that yields NEQ values one by one, processing inline values first,
         then values from file. Handles deduplication and start_neq resumption.
         Memory-efficient for large files as it processes values incrementally.
+        Yields values lazily - only processes the next value when requested.
         """
         seen = set()
         start_pending = start_neq
-        count = 0
 
         def iterate_sources():
             """Yield values from inline list first, then from file"""
+            # Process inline values first
             for val in inline_neqs:
                 yield val
+            # Then stream from file one row at a time
             if file_path:
                 yield from self._load_neqs_from_file(file_path)
 
         def generator():
-            nonlocal start_pending, count
+            nonlocal start_pending
+            # Process one value at a time - yield immediately when found
             for raw in iterate_sources():
                 val = str(raw).strip()
                 if not val:
@@ -797,20 +816,16 @@ class CtqScraperSpider(scrapy.Spider):
                 if val in seen:
                     continue
                 seen.add(val)
-                count += 1
                 
                 # Handle start_neq resumption: skip until we find the start value
                 if start_pending:
                     if val != start_pending:
                         continue
                     start_pending = None
-                    self.logger.info(f"Resuming from NEQ {val} (found at position {count})")
+                    self.logger.info(f"Resuming from NEQ {val}")
                 
+                # Yield immediately - don't wait for all values to be processed
                 yield val
-            
-            # Log completion
-            if count > 0:
-                self.logger.info(f"Generator completed: processed {count} unique NEQ values")
 
         return generator()
 
