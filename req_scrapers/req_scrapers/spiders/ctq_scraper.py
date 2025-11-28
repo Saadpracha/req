@@ -80,7 +80,13 @@ class CtqScraperSpider(scrapy.Spider):
                 self.logger.warning(f"Start NEQ {start_neq_clean} not found. Starting from beginning.")
                 start_neq_clean = None
 
+        # Create generator for NEQ values (memory-efficient for large files)
         self.neqs = self._iter_neq_values(inline_neqs, file, start_neq_clean)
+        
+        # Log initialization
+        inline_count = len(inline_neqs)
+        file_info = f" + file: {file}" if file else ""
+        self.logger.info(f"Initialized NEQ generator: {inline_count} inline values{file_info}")
 
         # Load proxies from proxies.json at project root if present
         try:
@@ -764,44 +770,76 @@ class CtqScraperSpider(scrapy.Spider):
         yield base_item
 
     def _iter_neq_values(self, inline_neqs, file_path, start_neq):
+        """
+        Generator that yields NEQ values one by one, processing inline values first,
+        then values from file. Handles deduplication and start_neq resumption.
+        Memory-efficient for large files as it processes values incrementally.
+        """
         seen = set()
         start_pending = start_neq
+        count = 0
 
         def iterate_sources():
+            """Yield values from inline list first, then from file"""
             for val in inline_neqs:
                 yield val
             if file_path:
                 yield from self._load_neqs_from_file(file_path)
 
         def generator():
-            nonlocal start_pending
+            nonlocal start_pending, count
             for raw in iterate_sources():
                 val = str(raw).strip()
-                if not val or val in seen:
+                if not val:
+                    continue
+                
+                # Deduplication: skip if we've seen this value
+                if val in seen:
                     continue
                 seen.add(val)
+                count += 1
+                
+                # Handle start_neq resumption: skip until we find the start value
                 if start_pending:
                     if val != start_pending:
                         continue
                     start_pending = None
+                    self.logger.info(f"Resuming from NEQ {val} (found at position {count})")
+                
                 yield val
+            
+            # Log completion
+            if count > 0:
+                self.logger.info(f"Generator completed: processed {count} unique NEQ values")
 
         return generator()
 
     def _value_exists_in_file(self, file_path: str, target: str) -> bool:
+        """
+        Check if a target NEQ exists in the file without loading all values.
+        Returns as soon as the value is found for efficiency with large files.
+        """
         try:
+            target_clean = str(target).strip()
             for value in self._load_neqs_from_file(file_path):
-                if value == target:
+                if str(value).strip() == target_clean:
                     return True
-        except Exception:
+        except Exception as exc:
+            self.logger.warning(f"Error checking for start_neq in file: {exc}")
             return False
         return False
 
     def _load_neqs_from_file(self, file_path: str):
+        """
+        Generator that yields NEQ values from a CSV file one row at a time.
+        Memory-efficient for large files as it doesn't load everything into memory.
+        """
         try:
             with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
                 reader = csv.DictReader(f)
+                row_count = 0
                 for row in reader:
+                    row_count += 1
                     val = row.get("NEQ") or next(
                         (v for k, v in row.items() if k and k.lower().strip() == "neq"),
                         None,
@@ -810,6 +848,12 @@ class CtqScraperSpider(scrapy.Spider):
                         stripped = str(val).strip()
                         if stripped:
                             yield stripped
+                
+                # Log file processing completion
+                if row_count > 0:
+                    self.logger.debug(f"Processed {row_count} rows from {file_path}")
+        except FileNotFoundError:
+            self.logger.error(f"File not found: {file_path}")
         except Exception as exc:
             self.logger.warning(f"Failed to load NEQs from {file_path}: {exc}")
 
