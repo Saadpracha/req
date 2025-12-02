@@ -157,35 +157,44 @@ class CtqScraperSpider(scrapy.Spider):
         except Exception as e:
             self.logger.warning(f"Failed to load proxies.json: {e}")
 
+    def _next_neq_request(self):
+        """
+        Get the next NEQ from the generator and build the initial request.
+
+        This is used to strictly process one NEQ at a time: we only call this
+        again from callbacks (success or error) once the previous NEQ has
+        finished its flow.
+        """
+        try:
+            neq = next(self.neqs)
+        except StopIteration:
+            self.logger.info("No more NEQs to process")
+            return None
+
+        # Get proxy info for logging
+        proxy_info = "none"
+        if self.proxy_list:
+            proxy_preview = self._get_current_proxy()
+            proxy_info = proxy_preview["ip"].split(":")[0] if proxy_preview["ip"] else "none"
+
+        self.logger.debug(f"Starting initial GET | NEQ={neq} | Proxy={proxy_info}")
+
+        request_gen = self.make_request(
+            url=self.start_urls[0],
+            callback=self.parse_initial,
+            meta={"neq": neq, "cookiejar": f"jar-{neq}"},
+        )
+        return next(request_gen)
+
     def start_requests(self):
         """
-        Generate initial requests one at a time from the NEQ generator.
-        This processes each NEQ value lazily - only when Scrapy requests the next request.
-        This is memory-efficient for large files with hundreds of thousands of NEQs.
-        The generator only advances when Scrapy actually requests the next request,
-        preventing upfront processing of all values.
+        Start with a single NEQ request. Subsequent NEQs are scheduled from
+        within callbacks, ensuring that only one NEQ is in-flight at a time,
+        regardless of how many total NEQs exist.
         """
-        # Process one NEQ at a time - generator only advances when Scrapy requests next item
-        for neq in self.neqs:
-            # Get proxy info for logging
-            proxy_info = "none"
-            if self.proxy_list:
-                # Preview which proxy will be used (next one in rotation)
-                proxy_preview = self._get_current_proxy()
-                proxy_info = proxy_preview["ip"].split(":")[0] if proxy_preview["ip"] else "none"
-            
-            self.logger.debug(f"Starting initial GET | NEQ={neq} | Proxy={proxy_info}")
-            
-            # Get the request from make_request generator and yield it directly
-            # This ensures we only process one NEQ at a time
-            request_gen = self.make_request(
-                url=self.start_urls[0],
-                callback=self.parse_initial,
-                meta={"neq": neq, "cookiejar": f"jar-{neq}"},
-            )
-            # Yield the request immediately - this allows Scrapy to process it
-            # before the generator advances to the next NEQ
-            yield next(request_gen)
+        req = self._next_neq_request()
+        if req is not None:
+            yield req
 
     def parse_initial(self, response):
         neq = response.meta["neq"]
@@ -207,16 +216,25 @@ class CtqScraperSpider(scrapy.Spider):
         
         if status != 200:
             self.logger.warning(f"parse_initial non-200 status {status} for NEQ {neq}")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
 
         form_selector = response.xpath('//form[@id="mainForm"]')
         if not form_selector:
             self.logger.warning(f"Form not found for NEQ {neq}")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
 
         view_state = response.xpath('//input[@name="javax.faces.ViewState"]/@value').get()
         if not view_state:
             self.logger.warning(f"ViewState not found in parse_initial for NEQ {neq}")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
 
         first_request_payload = {
@@ -298,10 +316,16 @@ class CtqScraperSpider(scrapy.Spider):
         
         if status != 200:
             self.logger.warning(f"check_validity non-200 status {status} for NEQ {neq}")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
         
         if not response.body:
             self.logger.warning(f"check_validity empty body for NEQ {neq}")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
         
         view_state = response.xpath('//input[@name="javax.faces.ViewState"]/@value').get()
@@ -309,9 +333,15 @@ class CtqScraperSpider(scrapy.Spider):
         
         ctq_action = response.xpath('//form[@id="mainForm"]/@action').get()
         if not ctq_action:
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
 
         if response.xpath('//h6[contains(text(),"Erreur(s)")]'):
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
 
         match_text = response.xpath('//acronym/following-sibling::p/text()').get()
@@ -430,6 +460,12 @@ class CtqScraperSpider(scrapy.Spider):
                     meta=req_meta,
                     dont_filter=True,
                 )
+        else:
+            # NEQ did not match; move on to the next value
+            self.logger.info(f"NEQ {neq} not found or mismatch; moving to next NEQ")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
 
     def extract_form_data(self, response, execution=None):
         onclick = response.xpath("//a[contains(@onclick, 'PECVL')]/@onclick").get()
@@ -491,6 +527,9 @@ class CtqScraperSpider(scrapy.Spider):
         
         if status != 200:
             self.logger.warning(f"parse_ctq_result non-200 status {status} for NEQ {neq}")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
 
         def extract_text(xpath):
@@ -575,6 +614,10 @@ class CtqScraperSpider(scrapy.Spider):
         }
 
         yield base_item
+        # After finishing this NEQ, schedule the next one
+        next_req = self._next_neq_request()
+        if next_req is not None:
+            yield next_req
     def extract_onclick_formdata(self, onclick_str, response):
         try:
             if "submitForm(" not in onclick_str:
@@ -613,6 +656,9 @@ class CtqScraperSpider(scrapy.Spider):
         
         if status != 200:
             self.logger.warning(f"parse_vrac_result non-200 status {status} for NEQ {neq}")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
         
         def extract_text(xpath):
@@ -697,6 +743,10 @@ class CtqScraperSpider(scrapy.Spider):
             }
             base_item.update(vrac_data)
             yield base_item
+            # Schedule next NEQ after finishing this one
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
 
     def parse_ctq_result_with_vrac(self, response):
         neq = response.meta["neq"]
@@ -719,6 +769,9 @@ class CtqScraperSpider(scrapy.Spider):
         
         if status != 200:
             self.logger.warning(f"parse_ctq_result_with_vrac non-200 status {status} for NEQ {neq}")
+            next_req = self._next_neq_request()
+            if next_req is not None:
+                yield next_req
             return
 
         def extract_text(xpath):
@@ -801,6 +854,10 @@ class CtqScraperSpider(scrapy.Spider):
         base_item.update(vrac_data)
         self.logger.debug(f"Final combined item: {base_item}")
         yield base_item
+        # After finishing this NEQ, schedule the next one
+        next_req = self._next_neq_request()
+        if next_req is not None:
+            yield next_req
 
     def _iter_neq_values(self, inline_neqs, file_path, start_neq):
         """
@@ -1179,3 +1236,7 @@ class CtqScraperSpider(scrapy.Spider):
         
         self.logger.error(f"ERROR: NEQ={neq} | Proxy={proxy_ip} | Status={response_status} | Error={failure_type}: {failure_msg}")
         self.errors += 1
+        # Schedule next NEQ after error
+        next_req = self._next_neq_request()
+        if next_req is not None:
+            yield next_req
