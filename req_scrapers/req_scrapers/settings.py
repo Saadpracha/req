@@ -69,6 +69,8 @@ DOWNLOADER_MIDDLEWARES = {
 ITEM_PIPELINES = {
     # Enrich first so CSV has AI fields
     "req_scrapers.pipelines.AIEnrichmentPipeline": 250,
+    # Store into MySQL ctq table (primary storage)
+    "req_scrapers.pipelines.MySQLCtqPipeline": 275,
     # Optional immediate CSV append if you set IMMEDIATE_CSV_PATH
     # "req_scrapers.pipelines.ImmediateCSVPipeline": 300,
 }
@@ -108,3 +110,10 @@ LOG_LEVEL = "DEBUG"
 FEED_EXPORTERS = {
     "csv": "req_scrapers.exporters.QuotedCsvItemExporter",
 }
+
+# Default MySQL settings (can be overridden via environment or scrapy settings)
+MYSQL_HOST = "52.60.176.24"
+MYSQL_DB = "v1lead2424_REQ_DB"
+MYSQL_USER = "v1lead2424_saad"
+MYSQL_PASSWORD = "1g2jWMb$WE^7HLe0"
+MYSQL_PORT = 3306

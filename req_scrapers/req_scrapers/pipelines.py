@@ -4,13 +4,15 @@
 # See: https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 
 
-# useful for handling different item types with a single interface
-from itemadapter import ItemAdapter
+from itemadapter import ItemAdapter  # useful for handling different item types with a single interface
 from pathlib import Path
 import csv
 import json
 import importlib.util
+import os
 import traceback
+
+import pymysql
 
 
 class ImmediateCSVPipeline:
@@ -65,6 +67,188 @@ class ImmediateCSVPipeline:
             self.file.flush()
         except Exception:
             pass
+        return item
+
+
+class MySQLCtqPipeline:
+    """
+    Store CTQ items into MySQL table `ctq`.
+
+    - Uses UNIQUE KEY on `neq` with ON DUPLICATE KEY UPDATE so re-runs refresh data.
+    - If DB connection fails, the pipeline disables itself and items continue
+      through the normal file/feed exporters (fallback logic).
+    - Connection details are taken from Scrapy settings first, then fall back
+      to environment variables, and finally to hardcoded defaults.
+    """
+
+    def __init__(self, host, db, user, password, port=3306):
+        self.host = host
+        self.db = db
+        self.user = user
+        self.password = password
+        self.port = int(port) if port else 3306
+        self.conn = None
+        self.cursor = None
+        self.enabled = False
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        settings = crawler.settings
+
+        host = settings.get("MYSQL_HOST") or os.getenv("MYSQL_HOST") or "52.60.176.24"
+        db = settings.get("MYSQL_DB") or os.getenv("MYSQL_DB") or "v1lead2424_REQ_DB"
+        user = settings.get("MYSQL_USER") or os.getenv("MYSQL_USER") or "v1lead2424_saad"
+        password = settings.get("MYSQL_PASSWORD") or os.getenv("MYSQL_PASSWORD") or "1g2jWMb$WE^7HLe0"
+        port = settings.getint("MYSQL_PORT", int(os.getenv("MYSQL_PORT", "3306")))
+
+        return cls(host=host, db=db, user=user, password=password, port=port)
+
+    def open_spider(self, spider):
+        try:
+            self.conn = pymysql.connect(
+                host=self.host,
+                user=self.user,
+                password=self.password,
+                database=self.db,
+                port=self.port,
+                charset="utf8mb4",
+                autocommit=False,
+                cursorclass=pymysql.cursors.DictCursor,
+            )
+            self.cursor = self.conn.cursor()
+            self.enabled = True
+            spider.logger.info(
+                f"MySQLCtqPipeline: connected to {self.host}:{self.port}/{self.db}"
+            )
+        except Exception as e:
+            # Disable pipeline but allow spider to continue with file / feed exporters
+            self.enabled = False
+            spider.logger.error(f"MySQLCtqPipeline: failed to connect to DB: {e}")
+
+    def close_spider(self, spider):
+        try:
+            if self.conn:
+                try:
+                    self.conn.commit()
+                except Exception:
+                    pass
+                self.cursor.close()
+                self.conn.close()
+        except Exception:
+            pass
+        finally:
+            self.conn = None
+            self.cursor = None
+            self.enabled = False
+
+    def process_item(self, item, spider):
+        if not self.enabled:
+            return item
+
+        adapter = ItemAdapter(item)
+
+        # Map item fields to ctq table columns, using sane fallbacks.
+        telephone = (
+            adapter.get("telephone")
+            or adapter.get("phone")
+            or adapter.get("telephone_number")
+        )
+        url = adapter.get("url") or adapter.get("website")
+
+        sql = """
+            INSERT INTO ctq (
+                neq,
+                nom,
+                full_address,
+                adresse,
+                ville,
+                province,
+                code_postal,
+                pays,
+                telephone,
+                siret,
+                categorie,
+                date_immatriculation,
+                statut,
+                naics,
+                secteur_activite,
+                description,
+                url,
+                extra_values,
+                vrac_numero_inscription,
+                vrac_region_exploitation,
+                vrac_nombre_camions,
+                vrac_nom_courtier
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s
+            )
+            ON DUPLICATE KEY UPDATE
+                nom = VALUES(nom),
+                full_address = VALUES(full_address),
+                adresse = VALUES(adresse),
+                ville = VALUES(ville),
+                province = VALUES(province),
+                code_postal = VALUES(code_postal),
+                pays = VALUES(pays),
+                telephone = VALUES(telephone),
+                siret = VALUES(siret),
+                categorie = VALUES(categorie),
+                date_immatriculation = VALUES(date_immatriculation),
+                statut = VALUES(statut),
+                naics = VALUES(naics),
+                secteur_activite = VALUES(secteur_activite),
+                description = VALUES(description),
+                url = VALUES(url),
+                extra_values = VALUES(extra_values),
+                vrac_numero_inscription = VALUES(vrac_numero_inscription),
+                vrac_region_exploitation = VALUES(vrac_region_exploitation),
+                vrac_nombre_camions = VALUES(vrac_nombre_camions),
+                vrac_nom_courtier = VALUES(vrac_nom_courtier)
+        """
+
+        params = (
+            adapter.get("neq"),
+            adapter.get("nom"),
+            adapter.get("full_address"),
+            adapter.get("adresse"),
+            adapter.get("ville"),
+            adapter.get("province"),
+            adapter.get("code_postal"),
+            adapter.get("pays"),
+            telephone,
+            adapter.get("siret"),
+            adapter.get("categorie_transport") or adapter.get("categorie"),
+            adapter.get("date_inscription") or adapter.get("date_immatriculation"),
+            adapter.get("statut"),
+            adapter.get("naics"),
+            adapter.get("secteur_activite"),
+            adapter.get("description"),
+            url,
+            adapter.get("extra_values"),
+            adapter.get("vrac_numero_inscription"),
+            adapter.get("vrac_region_exploitation"),
+            adapter.get("vrac_nombre_camions"),
+            adapter.get("vrac_nom_courtier"),
+        )
+
+        try:
+            self.cursor.execute(sql, params)
+            # Commit every row; if you want batching, this could be optimized.
+            self.conn.commit()
+        except Exception as e:
+            spider.logger.error(
+                f"MySQLCtqPipeline: insert/update failed for NEQ={adapter.get('neq')}: {e}"
+            )
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            # Return item so file/feed fallback still works
+            return item
+
         return item
 
 

@@ -1,6 +1,7 @@
 import csv
 import base64
 import re
+import os
 import scrapy
 from scrapy.http import FormRequest
 from urllib.parse import urljoin
@@ -8,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 import json
 import random
+
+import pymysql
 
 
 class CtqScraperSpider(scrapy.Spider):
@@ -58,7 +61,7 @@ class CtqScraperSpider(scrapy.Spider):
         "en-US,en;q=0.9,fr-CA;q=0.8",
     ]
 
-    def __init__(self, neqs=None, file=None, start_neq=None, *args, **kwargs):
+    def __init__(self, neqs=None, file=None, start_neq=None, use_db=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Print startup message to confirm debugging is enabled
         print("\n" + "="*80, flush=True)
@@ -80,8 +83,22 @@ class CtqScraperSpider(scrapy.Spider):
                 self.logger.warning(f"Start NEQ {start_neq_clean} not found. Starting from beginning.")
                 start_neq_clean = None
 
-        # Create generator for NEQ values (memory-efficient for large files)
-        self.neqs = self._iter_neq_values(inline_neqs, file, start_neq_clean)
+        # Decide source for NEQ values: database (ctq table) or file/CLI.
+        # If DB connection fails, we fall back to the existing file/inline logic.
+        self.use_db_source = bool(use_db)
+        if self.use_db_source:
+            try:
+                self.neqs = self._iter_neq_values_from_db(start_neq_clean)
+                self.logger.info("Initialized NEQ generator from MySQL ctq table")
+            except Exception as exc:
+                self.logger.error(
+                    f"Failed to initialize DB NEQ generator ({exc}); falling back to file/inline source"
+                )
+                self.use_db_source = False
+                self.neqs = self._iter_neq_values(inline_neqs, file, start_neq_clean)
+        else:
+            # Create generator for NEQ values (memory-efficient for large files)
+            self.neqs = self._iter_neq_values(inline_neqs, file, start_neq_clean)
         
         # Log initialization
         inline_count = len(inline_neqs)
@@ -858,6 +875,76 @@ class CtqScraperSpider(scrapy.Spider):
             except StopIteration:
                 # No more values to process
                 break
+
+    def _iter_neq_values_from_db(self, start_neq):
+        """
+        Generator that yields NEQ values from the MySQL `ctq` table.
+
+        Intended usage:
+        - `ctq` already contains rows where only `neq` is populated and all
+          other columns are NULL.
+        - This generator selects NEQs where `nom` IS NULL (i.e., not yet
+          processed by the scraper) and yields them one by one.
+        - The MySQL pipeline then writes full details back into the same row
+          using ON DUPLICATE KEY UPDATE.
+
+        This processes values lazily using a server-side cursor, so it can
+        handle hundreds of thousands of rows without loading them all in memory.
+        """
+        settings = self.settings
+        host = settings.get("MYSQL_HOST") or os.getenv("MYSQL_HOST") or "52.60.176.24"
+        db = settings.get("MYSQL_DB") or os.getenv("MYSQL_DB") or "v1lead2424_REQ_DB"
+        user = settings.get("MYSQL_USER") or os.getenv("MYSQL_USER") or "v1lead2424_saad"
+        password = settings.get("MYSQL_PASSWORD") or os.getenv("MYSQL_PASSWORD") or "1g2jWMb$WE^7HLe0"
+        port = settings.getint("MYSQL_PORT", int(os.getenv("MYSQL_PORT", "3306")))
+
+        self.logger.info(
+            f"Connecting to MySQL for NEQ source: {host}:{port}/{db} (ctq table)"
+        )
+
+        conn = pymysql.connect(
+            host=host,
+            user=user,
+            password=password,
+            database=db,
+            port=port,
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.SSCursor,  # server-side cursor for streaming
+        )
+
+        try:
+            with conn.cursor() as cursor:
+                if start_neq:
+                    # If resuming from a specific NEQ, only select NEQs >= that value.
+                    # This assumes NEQ is comparable; it is BIGINT in the DB.
+                    sql = """
+                        SELECT neq
+                        FROM ctq
+                        WHERE nom IS NULL AND neq >= %s
+                        ORDER BY id ASC
+                    """
+                    cursor.execute(sql, (start_neq,))
+                    self.logger.info(f"DB NEQ source: resuming from NEQ {start_neq}")
+                else:
+                    sql = """
+                        SELECT neq
+                        FROM ctq
+                        WHERE nom IS NULL
+                        ORDER BY id ASC
+                    """
+                    cursor.execute(sql)
+                    self.logger.info("DB NEQ source: starting from first pending NEQ")
+
+                for row in cursor:
+                    # row is a tuple (neq,)
+                    neq_val = str(row[0]).strip() if row and row[0] is not None else ""
+                    if neq_val:
+                        yield neq_val
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _value_exists_in_file(self, file_path: str, target: str) -> bool:
         """
