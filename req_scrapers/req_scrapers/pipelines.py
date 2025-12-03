@@ -210,6 +210,11 @@ class MySQLCtqPipeline:
                 vrac_nom_courtier = VALUES(vrac_nom_courtier)
         """
 
+        # Convert empty strings to None for varchar fields (cleaner than empty strings)
+        vrac_nombre_camions = adapter.get("vrac_nombre_camions")
+        if vrac_nombre_camions == "" or vrac_nombre_camions is None:
+            vrac_nombre_camions = None
+
         params = (
             adapter.get("neq"),
             adapter.get("nom"),
@@ -232,7 +237,7 @@ class MySQLCtqPipeline:
             adapter.get("extra_values"),
             adapter.get("vrac_numero_inscription"),
             adapter.get("vrac_region_exploitation"),
-            adapter.get("vrac_nombre_camions"),
+            vrac_nombre_camions,  # varchar(10) - keep as string or NULL
             adapter.get("vrac_nom_courtier"),
         )
 
