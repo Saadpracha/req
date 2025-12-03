@@ -147,18 +147,19 @@ class MySQLCtqPipeline:
 
         adapter = ItemAdapter(item)
 
-        # Map item fields to ctq table columns, using sane fallbacks.
+        # Map item fields to ctq table columns
         telephone = (
             adapter.get("telephone")
             or adapter.get("phone")
             or adapter.get("telephone_number")
         )
-        url = adapter.get("url") or adapter.get("website")
 
         sql = """
             INSERT INTO ctq (
                 neq,
                 nom,
+                nir,
+                titre,
                 full_address,
                 adresse,
                 ville,
@@ -166,14 +167,13 @@ class MySQLCtqPipeline:
                 code_postal,
                 pays,
                 telephone,
-                siret,
-                categorie,
-                date_immatriculation,
-                statut,
-                naics,
-                secteur_activite,
-                description,
-                url,
+                categorie_transport,
+                date_inscription,
+                date_prochaine_maj,
+                code_securite,
+                droit_circulation,
+                droit_exploiter,
+                motif,
                 extra_values,
                 vrac_numero_inscription,
                 vrac_region_exploitation,
@@ -183,10 +183,12 @@ class MySQLCtqPipeline:
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s
             )
             ON DUPLICATE KEY UPDATE
                 nom = VALUES(nom),
+                nir = VALUES(nir),
+                titre = VALUES(titre),
                 full_address = VALUES(full_address),
                 adresse = VALUES(adresse),
                 ville = VALUES(ville),
@@ -194,14 +196,13 @@ class MySQLCtqPipeline:
                 code_postal = VALUES(code_postal),
                 pays = VALUES(pays),
                 telephone = VALUES(telephone),
-                siret = VALUES(siret),
-                categorie = VALUES(categorie),
-                date_immatriculation = VALUES(date_immatriculation),
-                statut = VALUES(statut),
-                naics = VALUES(naics),
-                secteur_activite = VALUES(secteur_activite),
-                description = VALUES(description),
-                url = VALUES(url),
+                categorie_transport = VALUES(categorie_transport),
+                date_inscription = VALUES(date_inscription),
+                date_prochaine_maj = VALUES(date_prochaine_maj),
+                code_securite = VALUES(code_securite),
+                droit_circulation = VALUES(droit_circulation),
+                droit_exploiter = VALUES(droit_exploiter),
+                motif = VALUES(motif),
                 extra_values = VALUES(extra_values),
                 vrac_numero_inscription = VALUES(vrac_numero_inscription),
                 vrac_region_exploitation = VALUES(vrac_region_exploitation),
@@ -212,6 +213,8 @@ class MySQLCtqPipeline:
         params = (
             adapter.get("neq"),
             adapter.get("nom"),
+            adapter.get("nir"),
+            adapter.get("titre"),
             adapter.get("full_address"),
             adapter.get("adresse"),
             adapter.get("ville"),
@@ -219,14 +222,13 @@ class MySQLCtqPipeline:
             adapter.get("code_postal"),
             adapter.get("pays"),
             telephone,
-            adapter.get("siret"),
-            adapter.get("categorie_transport") or adapter.get("categorie"),
-            adapter.get("date_inscription") or adapter.get("date_immatriculation"),
-            adapter.get("statut"),
-            adapter.get("naics"),
-            adapter.get("secteur_activite"),
-            adapter.get("description"),
-            url,
+            adapter.get("categorie_transport"),
+            adapter.get("date_inscription"),
+            adapter.get("date_prochaine_maj"),
+            adapter.get("code_securite"),
+            adapter.get("droit_circulation"),
+            adapter.get("droit_exploiter"),
+            adapter.get("motif"),
             adapter.get("extra_values"),
             adapter.get("vrac_numero_inscription"),
             adapter.get("vrac_region_exploitation"),
