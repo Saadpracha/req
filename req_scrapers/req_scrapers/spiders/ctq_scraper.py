@@ -32,11 +32,13 @@ class CtqScraperSpider(scrapy.Spider):
         "DOWNLOADER_CLIENT_TLS_METHOD": "TLS",
     }
 
-    # Proxy state
+    # Proxy / state
     proxy_list = []
     current_proxy_index = 0
     total_requests = 0
     errors = 0
+    # Track last NEQ read from DB source so we can resume manually if needed
+    last_db_neq = None
     
     # User agents for rotation
     user_agents = [
@@ -966,37 +968,58 @@ class CtqScraperSpider(scrapy.Spider):
             database=db,
             port=port,
             charset="utf8mb4",
-            cursorclass=pymysql.cursors.SSCursor,  # server-side cursor for streaming
+            # Use a regular buffered cursor instead of SSCursor to avoid
+            # unbuffered read/close edge‑cases when the connection drops.
+            cursorclass=pymysql.cursors.Cursor,
         )
 
         try:
             with conn.cursor() as cursor:
-                if start_neq:
-                    # If resuming from a specific NEQ, only select NEQs >= that value.
-                    # This assumes NEQ is comparable; it is BIGINT in the DB.
-                    sql = """
-                        SELECT neq
-                        FROM ctq
-                        WHERE nom IS NULL AND neq >= %s
-                        ORDER BY id ASC
-                    """
-                    cursor.execute(sql, (start_neq,))
-                    self.logger.info(f"DB NEQ source: resuming from NEQ {start_neq}")
-                else:
-                    sql = """
-                        SELECT neq
-                        FROM ctq
-                        WHERE nom IS NULL
-                        ORDER BY id ASC
-                    """
-                    cursor.execute(sql)
-                    self.logger.info("DB NEQ source: starting from first pending NEQ")
+                try:
+                    if start_neq:
+                        # If resuming from a specific NEQ, only select NEQs >= that value.
+                        # This assumes NEQ is comparable; it is BIGINT in the DB.
+                        sql = """
+                            SELECT neq
+                            FROM ctq
+                            WHERE nom IS NULL AND neq >= %s
+                            ORDER BY id ASC
+                        """
+                        cursor.execute(sql, (start_neq,))
+                        self.logger.info(f"DB NEQ source: resuming from NEQ {start_neq}")
+                    else:
+                        sql = """
+                            SELECT neq
+                            FROM ctq
+                            WHERE nom IS NULL
+                            ORDER BY id ASC
+                        """
+                        cursor.execute(sql)
+                        self.logger.info("DB NEQ source: starting from first pending NEQ")
 
-                for row in cursor:
-                    # row is a tuple (neq,)
-                    neq_val = str(row[0]).strip() if row and row[0] is not None else ""
-                    if neq_val:
-                        yield neq_val
+                    for row in cursor:
+                        # row is a tuple (neq,)
+                        neq_val = str(row[0]).strip() if row and row[0] is not None else ""
+                        if neq_val:
+                            # Remember last successfully yielded NEQ so we can
+                            # resume from it in a subsequent run (via start_neq)
+                            self.last_db_neq = neq_val
+                            yield neq_val
+                except pymysql.err.OperationalError as exc:
+                    # Gracefully stop the generator if the DB connection is lost
+                    # and log the last successfully yielded NEQ so the next run
+                    # can resume using `-a start_neq=<last_db_neq>`.
+                    if self.last_db_neq:
+                        self.logger.warning(
+                            f"DB NEQ generator stopped at NEQ {self.last_db_neq} "
+                            f"due to OperationalError: {exc}"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"DB NEQ generator stopped before yielding any NEQ "
+                            f"due to OperationalError: {exc}"
+                        )
+                    return
         finally:
             try:
                 conn.close()

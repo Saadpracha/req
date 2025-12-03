@@ -23,11 +23,11 @@ NEWSPIDER_MODULE = "req_scrapers.spiders"
 
 # Concurrency and throttling settings (be polite; reduce ban risk)
 # Use very conservative concurrency and a small randomized delay
-CONCURRENT_REQUESTS = 8
-# CONCURRENT_REQUESTS_PER_DOMAIN = 1
-# CONCURRENT_REQUESTS_PER_IP = 1
-DOWNLOAD_DELAY = 0.5
-RANDOMIZE_DOWNLOAD_DELAY = 0.3
+CONCURRENT_REQUESTS = 1
+CONCURRENT_REQUESTS_PER_DOMAIN = 1
+CONCURRENT_REQUESTS_PER_IP = 1
+DOWNLOAD_DELAY = 1
+RANDOMIZE_DOWNLOAD_DELAY = 0.5
 # ZYTE_API_EXPERIMENTAL_COOKIES_ENABLED = True
 # DOWNLOAD_DELAY = 1
 
@@ -79,11 +79,11 @@ ITEM_PIPELINES = {
 
 # Enable and configure the AutoThrottle extension (reduces request rate on load)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html
-AUTOTHROTTLE_ENABLED = True
+# AUTOTHROTTLE_ENABLED = True
 # # The initial download delay
-AUTOTHROTTLE_START_DELAY = 1.0
+# AUTOTHROTTLE_START_DELAY = 1.0
 # # The maximum download delay to be set in case of high latencies
-AUTOTHROTTLE_MAX_DELAY = 10.0
+# AUTOTHROTTLE_MAX_DELAY = 10.0
 # # The average number of requests Scrapy should be sending in parallel to
 # # each remote server
 # AUTOTHROTTLE_TARGET_CONCURRENCY = 0.5
